@@ -217,9 +217,11 @@ func TestHostileStatementsNeverParseAndNeverPanic(t *testing.T) {
 	reSign := func(edit func(map[string]any)) []byte {
 		// A statement whose payload is edited and re-signed by the right root:
 		// the signatures hold, so only the parser can refuse it.
-		c := map[string]any{}
-		for k, v := range claims {
-			c[k] = v
+		// A fresh copy each time: the jwk member is itself a map, and an edit
+		// to it must not reach the cases after it.
+		var c map[string]any
+		if err := json.Unmarshal(payload, &c); err != nil {
+			t.Fatal(err)
 		}
 		edit(c)
 		b, _ := json.Marshal(c)
