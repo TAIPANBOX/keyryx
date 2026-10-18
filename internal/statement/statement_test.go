@@ -263,7 +263,7 @@ func TestHostileStatementsNeverParseAndNeverPanic(t *testing.T) {
 		"a kid that is not the key's": reSign(func(c map[string]any) { c["kid"] = "not-the-thumbprint" }),
 		"a key with a private member": reSign(func(c map[string]any) {
 			jk := c["jwk"].(map[string]any)
-			jk["d"] = base64.RawURLEncoding.EncodeToString(k.D.Bytes())
+			jk["d"] = base64.RawURLEncoding.EncodeToString(rawPrivate(t, k))
 		}),
 		"a key off the curve": reSign(func(c map[string]any) {
 			jk := c["jwk"].(map[string]any)
@@ -324,7 +324,7 @@ func TestHostileKeysAreRefused(t *testing.T) {
 		raw []byte
 		alg policy.Alg
 	}{
-		"a private member":                 {with("d", b64(k.D.Bytes())), policy.ES256},
+		"a private member":                 {with("d", b64(rawPrivate(t, k))), policy.ES256},
 		"an unknown member":                {with("x5u", "https://evil.example/cert"), policy.ES256},
 		"an RSA type":                      {with("kty", "RSA"), policy.ES256},
 		"a symmetric type":                 {on(map[string]any{"kty": "oct", "k": b64([]byte("secret"))}), policy.ES256},
@@ -395,4 +395,14 @@ func TestAProofBindsTheKeyTheNameTheConsumerAndTheChallenge(t *testing.T) {
 	if !bytes.HasPrefix(in, []byte("keyryx/delegate/v1\x00")) {
 		t.Errorf("the proof input carries no domain separator: %q", in[:20])
 	}
+}
+
+// rawPrivate is the private scalar, fixed width, as a JWK's d would carry it.
+func rawPrivate(t *testing.T, k *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	b, err := k.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }

@@ -474,7 +474,7 @@ func TestACertifiedKeyIsNeverHeld(t *testing.T) {
 	leaky := newHolder(t)
 	var j map[string]any
 	_ = json.Unmarshal(leaky.jwk, &j)
-	j["d"] = base64.RawURLEncoding.EncodeToString(leaky.key.D.FillBytes(make([]byte, 32)))
+	j["d"] = base64.RawURLEncoding.EncodeToString(rawPrivate(t, leaky.key))
 	withD, _ := json.Marshal(j)
 	c, _, _ := s.reg.Challenge("vouchryx", "vouchryx-token")
 	if _, _, err := s.reg.Delegate("vouchryx", "vouchryx-token", Request{JWK: withD, Challenge: c, Proof: leaky.prove(t, "vouchryx-token", "vouchryx", c), Lifetime: time.Hour}, record); err == nil {
@@ -492,7 +492,7 @@ func TestACertifiedKeyIsNeverHeld(t *testing.T) {
 		files++
 		raw, _ := os.ReadFile(p)
 		for _, h := range keys {
-			d := h.key.D.FillBytes(make([]byte, 32))
+			d := rawPrivate(t, h.key)
 			for _, form := range [][]byte{d, []byte(base64.RawURLEncoding.EncodeToString(d)), []byte(base64.StdEncoding.EncodeToString(d)), []byte(hex.EncodeToString(d))} {
 				if bytes.Contains(raw, form) {
 					t.Fatalf("%s holds a delegated key's private member", p)
@@ -504,4 +504,14 @@ func TestACertifiedKeyIsNeverHeld(t *testing.T) {
 	if files < 3 {
 		t.Fatalf("searched %d files, so this test measured nothing", files)
 	}
+}
+
+// rawPrivate is the private scalar, fixed width, for searching files for it.
+func rawPrivate(t *testing.T, k *ecdsa.PrivateKey) []byte {
+	t.Helper()
+	b, err := k.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
