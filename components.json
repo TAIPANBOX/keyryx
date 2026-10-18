@@ -1,0 +1,34 @@
+{
+  "$comment": [
+    "What this repository contributes to a running stack, and what a check may",
+    "believe about it. Everything under `checked` is proved against this",
+    "repository by internal/manifest, by building and running the binary.",
+    "Everything under `declared` is a statement nobody can verify and carries",
+    "its own `why`."
+  ],
+  "schema": "taipanbox.dev/components/v1",
+  "repo": "TAIPANBOX/keyryx",
+  "distribution": "not distributed yet: no tag. ghcr.io/taipanbox/keyryx is published by .github/workflows/release.yml on the first v* tag push (linux/amd64 and linux/arm64, signed keyless with cosign, SBOM and build-provenance attestation attached)",
+  "components": [
+    {
+      "name": "keyryx",
+      "class": "service",
+      "checked": {
+        "package": "github.com/TAIPANBOX/keyryx/cmd/keyryx",
+        "env": {},
+        "refused_roles": ["custody", "witness"],
+        "missing_required_exit_code": 2
+      },
+      "declared": {
+        "role": {
+          "value": "key custody and an independent witness for the agent-governance record, off every request path",
+          "why": "a sentence about purpose is not a property of the source"
+        },
+        "scaffold": {
+          "value": "neither role is built in this version; both refuse to start with exit 2",
+          "why": "a key service that came up holding nothing would answer and sign nothing, which reads as working; the roles arrive in their own pull requests and this entry goes with the first of them"
+        }
+      }
+    }
+  ]
+}
