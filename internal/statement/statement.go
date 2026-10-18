@@ -29,6 +29,8 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -121,9 +123,18 @@ type RootKey func(kid string) (policy.Alg, []byte, bool)
 // a root since retired or revoked still verifies as signed by it; whether it
 // is still published is the registry's decision.
 func StoreRoots(s *keystore.Store) RootKey {
+	return StoreKeys(s, RootES384, RootMLDSA)
+}
+
+// StoreKeys finds the keys of names in a store, in any state, by kid.
+func StoreKeys(s *keystore.Store, names ...string) RootKey {
+	want := map[string]bool{}
+	for _, n := range names {
+		want[n] = true
+	}
 	return func(kid string) (policy.Alg, []byte, bool) {
 		for _, r := range s.Inventory() {
-			if (r.Name == RootES384 || r.Name == RootMLDSA) && r.Kid == kid {
+			if want[r.Name] && r.Kid == kid {
 				return r.Alg, r.Public, true
 			}
 		}
@@ -131,13 +142,90 @@ func StoreRoots(s *keystore.Store) RootKey {
 	}
 }
 
-// StoreKeys finds the keys of names in a store, in any state, by kid. Scaffold.
-func StoreKeys(s *keystore.Store, names ...string) RootKey {
-	return func(string) (policy.Alg, []byte, bool) { return "", nil, false }
-}
+// MaxKeySet bounds a key set read back.
+const MaxKeySet = 1 << 20
 
-// KeysFromJWKS finds keys by kid in a published key set. Scaffold.
-func KeysFromJWKS(raw []byte) (RootKey, error) { return nil, errors.New("statement: not implemented") }
+// KeysFromJWKS reads a key set this service published (keystore.JWK's form:
+// EC keys, and ML-DSA-65 keys in the AKP form) back into keys by kid. Every
+// kid is recomputed from its key, a private member or an algorithm the key is
+// not refuses the set, and nothing else is accepted.
+func KeysFromJWKS(raw []byte) (RootKey, error) {
+	if len(raw) > MaxKeySet {
+		return nil, errors.New("statement: the key set is over its size cap")
+	}
+	var set struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := strict(raw, &set); err != nil {
+		return nil, fmt.Errorf("statement: not a key set: %w", err)
+	}
+	type key struct {
+		alg policy.Alg
+		pub []byte
+	}
+	keys := map[string]key{}
+	for i, k := range set.Keys {
+		var head struct {
+			Kty string `json:"kty"`
+		}
+		_ = json.Unmarshal(k, &head)
+		var kid string
+		var alg policy.Alg
+		var pub []byte
+		switch head.Kty {
+		case "EC":
+			var in struct {
+				Alg string `json:"alg"`
+			}
+			_ = json.Unmarshal(k, &in)
+			j, point, err := ParseJWK(k, policy.Alg(in.Alg))
+			if err != nil {
+				return nil, fmt.Errorf("statement: key %d: %w", i, err)
+			}
+			var given struct {
+				Kid *string `json:"kid"`
+			}
+			_ = json.Unmarshal(k, &given)
+			if given.Kid == nil {
+				return nil, fmt.Errorf("statement: key %d names no kid", i)
+			}
+			kid, alg, pub = j.Kid, policy.Alg(j.Alg), point
+		case "AKP":
+			var in struct {
+				Kty string `json:"kty"`
+				Alg string `json:"alg"`
+				Pub string `json:"pub"`
+				Kid string `json:"kid"`
+				Use string `json:"use"`
+			}
+			if err := strict(k, &in); err != nil || in.Alg != string(policy.MLDSA65) || in.Use != "sig" {
+				return nil, fmt.Errorf("statement: key %d is not an ML-DSA-65 key in the AKP form", i)
+			}
+			p, err := b64.DecodeString(in.Pub)
+			if err != nil {
+				return nil, fmt.Errorf("statement: key %d: pub is not base64url", i)
+			}
+			if _, err := mldsa.NewPublicKey(mldsa.MLDSA65(), p); err != nil {
+				return nil, fmt.Errorf("statement: key %d is not an ML-DSA-65 public key", i)
+			}
+			sum := sha256.Sum256(p)
+			if in.Kid != "mldsa65:"+base64.RawURLEncoding.EncodeToString(sum[:]) {
+				return nil, fmt.Errorf("statement: key %d names a kid that is not its own", i)
+			}
+			kid, alg, pub = in.Kid, policy.MLDSA65, p
+		default:
+			return nil, fmt.Errorf("statement: key %d has a key type this service never publishes", i)
+		}
+		if _, dup := keys[kid]; dup {
+			return nil, fmt.Errorf("statement: two keys share kid %s", kid)
+		}
+		keys[kid] = key{alg, pub}
+	}
+	return func(kid string) (policy.Alg, []byte, bool) {
+		k, ok := keys[kid]
+		return k.alg, k.pub, ok
+	}, nil
+}
 
 func strict(raw []byte, into any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))

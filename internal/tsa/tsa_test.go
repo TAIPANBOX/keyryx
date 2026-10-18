@@ -61,7 +61,17 @@ func newAuthority(t *testing.T, rsaKey bool, eku []x509.ExtKeyUsage) *authority 
 		t.Fatal(err)
 	}
 	tmpl := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "Test TSA"},
-		NotBefore: genTime.Add(-time.Hour), NotAfter: genTime.Add(time.Hour), ExtKeyUsage: eku, KeyUsage: x509.KeyUsageDigitalSignature}
+		NotBefore: genTime.Add(-time.Hour), NotAfter: genTime.Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature}
+	if len(eku) > 0 {
+		// Critical, as RFC 3161 section 2.3 requires; x509 would mark it
+		// non-critical if left to ExtKeyUsage.
+		var oids []asn1.ObjectIdentifier
+		for range eku {
+			oids = append(oids, asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 8})
+		}
+		v, _ := asn1.Marshal(oids)
+		tmpl.ExtraExtensions = []pkix.Extension{{Id: asn1.ObjectIdentifier{2, 5, 29, 37}, Critical: true, Value: v}}
+	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca, tsaKey.Public(), caKey)
 	if err != nil {
 		t.Fatal(err)
@@ -221,8 +231,8 @@ func (a *authority) respond(t *testing.T, req Request, k knobs) []byte {
 	}
 	encap := mustMarshal(t, struct {
 		Type    asn1.ObjectIdentifier
-		Content asn1.RawValue `asn1:"explicit,tag:0"`
-	}{ect, asn1.RawValue{FullBytes: mustMarshal(t, tst)}})
+		Content asn1.RawValue
+	}{ect, explicit0(t, mustMarshal(t, tst))})
 	certs := k.certs
 	if certs == nil {
 		certs = []*x509.Certificate{a.tsaCert}
@@ -243,13 +253,20 @@ func (a *authority) respond(t *testing.T, req Request, k knobs) []byte {
 	sd := mustMarshal(t, asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: bytes.Join(sdFields, nil)})
 	token := mustMarshal(t, struct {
 		Type    asn1.ObjectIdentifier
-		Content asn1.RawValue `asn1:"explicit,tag:0"`
-	}{asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}, asn1.RawValue{FullBytes: sd}})
+		Content asn1.RawValue
+	}{asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}, explicit0(t, sd)})
 	resp := mustMarshal(t, asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagSequence, IsCompound: true, Bytes: append(statusInfo, token...)})
 	if k.trailing {
 		resp = append(resp, 0)
 	}
 	return resp
+}
+
+// explicit0 wraps an element in [0] EXPLICIT. asn1.Marshal writes a
+// RawValue's FullBytes as they are and drops the tag parameters, so the
+// wrapper is built by hand, as a real token carries it.
+func explicit0(t *testing.T, inner []byte) asn1.RawValue {
+	return asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: inner}
 }
 
 func aRequest(t *testing.T) Request {
@@ -310,6 +327,17 @@ func TestATimestampThatDoesNotHoldIsRefused(t *testing.T) {
 	}
 	stranger := newAuthority(t, false, []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping})
 	noEKU := newAuthority(t, false, nil)
+	nonCritical := newAuthority(t, false, nil)
+	{
+		tmpl := *nonCritical.tsaCert
+		tmpl.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageTimeStamping}
+		tmpl.ExtraExtensions, tmpl.Extensions = nil, nil
+		der, err := x509.CreateCertificate(rand.Reader, &tmpl, nonCritical.caCert, nonCritical.tsaKey.Public(), nonCritical.caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nonCritical.tsaCert, _ = x509.ParseCertificate(der)
+	}
 	otherKey, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	for name, k := range map[string]knobs{
 		"a rejection":                              {status: 2},
@@ -335,6 +363,9 @@ func TestATimestampThatDoesNotHoldIsRefused(t *testing.T) {
 	}
 	if _, err := Verify(noEKU.respond(t, req, knobs{}), req, noEKU.roots); err == nil {
 		t.Error("a token from a certificate without the time-stamping purpose verified")
+	}
+	if _, err := Verify(nonCritical.respond(t, req, knobs{}), req, nonCritical.roots); err == nil {
+		t.Error("a token from a certificate whose time-stamping purpose is not critical verified")
 	}
 	if _, err := Verify(a.respond(t, req, knobs{}), aRequest(t), a.roots); err == nil {
 		t.Error("a token for another request verified")

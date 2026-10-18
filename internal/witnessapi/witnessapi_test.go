@@ -1,6 +1,7 @@
 package witnessapi
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -179,4 +180,11 @@ func TestTheWitnessRouteTableIsTheMux(t *testing.T) {
 	if w.Code != http.StatusMethodNotAllowed && w.Code != http.StatusNotFound {
 		t.Errorf("POST to the head answered %d", w.Code)
 	}
+}
+
+func hexOrB64(s string) ([]byte, error) {
+	if b, err := base64.RawURLEncoding.DecodeString(s); err == nil {
+		return b, nil
+	}
+	return hex.DecodeString(s)
 }

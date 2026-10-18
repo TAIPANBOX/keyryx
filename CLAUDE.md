@@ -45,8 +45,12 @@ docs or commit messages, as tooling for acting against anyone else.
    `POST /v1/keys/{name}/sign` (an approval granted, a seal, a manifest),
    `POST /v1/keys/{name}/challenge` and `POST /v1/keys/{name}/delegate` (a key
    renewal, at most every few hours per consumer), `POST /v1/keys/{name}/rotate`
-   and `POST /v1/kids/{kid}/revoke` (an operator). *(test:
-   `TestTheRouteTableIsTheMux` holds the table and the mux equal; that no
+   and `POST /v1/kids/{kid}/revoke` (an operator). The witness routes are their
+   own table, `witnessapi.Routes`, reads only: `GET /healthz`,
+   `GET /v1/witness/head`, `GET /v1/witness/keys`, `GET /v1/witness/inclusion`,
+   `GET /v1/witness/consistency`, `GET /v1/witness/entries`, asked by an auditor
+   or a verifier holding an old head. *(tests: `TestTheRouteTableIsTheMux` and
+   `TestTheWitnessRouteTableIsTheMux` hold each table and its mux equal; that no
    route is called per request is held by review)*
 
 2. **No decisions.** It signs what a consumer that was granted a key asks it
@@ -72,8 +76,10 @@ docs or commit messages, as tooling for acting against anyone else.
 6. **A role that cannot do its job refuses to start.** A key service that came
    up holding nothing would answer and sign nothing, which reads as working; one
    that came up with a default key would sign anything. Exit code 2, and the
-   message names what is missing. *(test: `TestARoleThatIsNotBuiltRefusesToStart`,
-   `TestTheBuiltBinaryRefusesARoleItDoesNotBuild`,
+   message names what is missing. *(test: `TestTheWitnessRefusesToStartWithoutItsConfiguration`,
+   `TestTheBuiltBinaryRefusesEachRoleWithoutItsConfiguration`,
+   `TestEachRequiredWitnessVariableIsNamedWhenMissing`, `TestMalformedWitnessValuesRefuseTheStart`,
+   `TestTheBuiltWitnessRefusesWithoutEachRequiredVariable`,
    `TestCustodyRefusesToStartWithoutItsConfiguration`,
    `TestCustodyRefusesWithoutEachRequiredVariableAndAnswersItsHealthPath`,
    `TestEachRequiredVariableIsNamedWhenMissing`, `TestMalformedValuesRefuseTheStart`,
@@ -82,8 +88,13 @@ docs or commit messages, as tooling for acting against anyone else.
 7. **Custody and witness never share a process, a key, a uid or a data
    directory.** A compromise of custody gives the power to sign; the witness,
    which saw what was there before, is what then disagrees, and it can only if
-   custody cannot reach its key or its log. *(not built yet: held by the
-   witness pull request and by the launchers' wiring gates)*
+   custody cannot reach its key or its log. The witness refuses to start when
+   `KEYRYX_DATA` or `KEYRYX_ROOT_KEY_FILE` names its own directory or key file,
+   or holds the same root key; it has its own key store, its own log and its
+   own key, and nothing it serves writes. The uid and the volume each role runs
+   under are the launcher's to set. *(test:
+   `TestTheWitnessNeverSharesCustodysDataOrRootKey`; the uid and volume half is
+   held by the launchers' wiring gates)*
 
 8. **The standard library first; every dependency argued.** `crypto/ecdsa`,
    `crypto/mldsa`, `crypto/aes`, `crypto/hkdf`, `net/http` cover what this
@@ -98,7 +109,7 @@ docs or commit messages, as tooling for acting against anyone else.
    `why`. *(tests: `TestEveryBinaryThisRepositoryBuildsIsDeclaredAndTheReverse`,
    `TestEveryEnvironmentVariableThisRepositoryReadsIsDeclaredAndTheReverse`,
    `TestEveryDeclaredEntryCarriesItsReason`,
-   `TestTheBuiltBinaryRefusesARoleItDoesNotBuild`)*
+   `TestTheBuiltBinaryRefusesEachRoleWithoutItsConfiguration`)*
 
 10. **No quote of the owner and no attribution by name in any tracked file.**
     This repository is public. A decision is recorded as `@decided YYYY-MM-DD`
@@ -245,6 +256,87 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestRevokingAnAlarmedStatementAcknowledgesIt`, `TestTheStateRouteNamesEveryAlarm`,
     `TestTheBuiltCustodyKeepsAnEditedBackKeyOutAndSaysSo`)*
 
+31. **The witness's prefix is a byte hash, and it reads every byte it saw
+    again.** For each stream it keeps the lines and bytes it read and the
+    SHA-256 of those bytes, agent-passport SPEC 6.5.1's `prefix`, because the
+    SPEC 6.5 chain hash leaves `prev_hash` out and a rewrite plus a re-link
+    passes the chain. Every interval it hashes from byte zero, checking each
+    accepted checkpoint's N on the way; a stream over `KEYRYX_WITNESS_FULL_BYTES`
+    is hashed from zero every `KEYRYX_WITNESS_FULL_INTERVAL` and forward in
+    between, and the log says which. Its state is its log, so a rewrite made
+    while it was down is caught on its first read. *(tests:
+    `TestARewriteOfAnyByteItSawIsCaught`, `TestAStreamThatShrankIsCaught`,
+    `TestAForwardIntervalReadsOnlyNewBytesAndAFullOneReadsAll`,
+    `TestTheWitnessSurvivesARestartAndCatchesARewriteMadeWhileItWasDown`,
+    `TestAnHonestStreamIsWitnessedAndRaisesNothing`, `TestHostileStreamsNeverPanic`)*
+
+32. **A checkpoint is checked by SPEC 6.5.1 format v1, step by step.** Its
+    own RFC 8785 form and nothing else; its signature under a key a statement
+    both halves of the delegation root signed, valid at the record's `at` and
+    not revoked by the time the witness saw it; its `prev`, `count`, `head` and
+    `prefix`; and every checkpoint kept before must still hold. A record ahead of
+    the stream waits for it; a restart is medium only when an accepted `resume`
+    at the line before explains it. *(tests: `TestTheSpecVectorsVerify`,
+    `TestARecordThatIsNotItsOwnCanonicalFormIsRefused`,
+    `TestAnUnsignedRecordIsReportedUnsignedNeverValid`,
+    `TestPrevChainsAndADroppedRecordIsRefused`,
+    `TestASignatureOrAKeyThatDoesNotHoldIsRefused`, `TestATornLastLineIsIgnored`,
+    `TestHostileCheckpointFilesNeverPanicAndNeverAcceptWhatWasNotSigned`,
+    `TestACheckpointThatDoesNotHoldIsInvalidAndAnUnsignedOneSaysSo`,
+    `TestACheckpointAheadOfTheStreamWaits`,
+    `TestAKeptCheckpointCatchesARewriteTheProducerSignedAfter`,
+    `TestARestartIsMediumWhenAResumeExplainsItAndHighWhenNothingDoes`,
+    `TestTheCustodyClientTakesAKeyOnlyOnAStatementThatHolds`,
+    `TestVerifyStreamsChecksCheckpointsAgainstTheirStatements`)*
+
+33. **The witness's own log is an RFC 9162 Merkle tree over SHA-384, and every
+    head is signed by both halves of its key.** An entry per observation, a
+    head `{size, root, at}` signed ES384 and ML-DSA-65 every interval; the open
+    refuses an edited, moved or reordered entry, a head that is not the root of
+    what it covers, goes back, or misses a half; entries after the last head
+    are dropped. Inclusion and consistency proofs are served and `keyryx verify
+    log` checks it all offline, never saying OK about nothing. *(tests:
+    `TestTheRootsRFC9162Specifies`, `TestTheFrontierRootIsTheTreeRoot`,
+    `TestEveryInclusionProofVerifiesAndNoOtherDoes`,
+    `TestEveryConsistencyProofVerifiesAndNoOtherDoes`,
+    `TestHostileProofsNeverVerifyAndNeverPanic`,
+    `TestTheLogIsAMerkleTreeAndEveryHeadIsSignedByBothHalves`,
+    `TestAnEditedLogOrHeadRefusesTheStart`, `TestATornLastLineIsDiscardedAndTheLogContinues`,
+    `TestHostileLogFilesNeverPanicAndNeverOpenInconsistent`,
+    `TestVerifyDirSaysOkBrokenOrMeasuredNothing`, `TestTheWitnessRoutesServeProofsThatVerify`,
+    `TestHostileProofQueriesAreRefusedAndNeverPanic`, `TestVerifyLogChecksAWitnessLog`,
+    `TestVerifyRefusesToSayOKAboutNothing`, `TestAKeySetReadsBackAsKeysByKid`,
+    `TestTheBuiltWitnessCatchesARewriteAndVerifyChecksItsLog`)*
+
+34. **A trailryx store root is attested in trailryx-sign's own bytes, and a
+    sealed manifest that changed is reported.** The manifests are read as
+    trailryx-node writes them and the store root computed as trailryx-verify
+    does, from trailryx's source at 92dd4b6; each new root is signed with the
+    witness key's ES384 half over `witness_statement`; a manifest the witness
+    saw that is rewritten or gone is `witness_root_equivocated`, and a record
+    grown past a seal's worth with no new root for two seal intervals is
+    `witness_root_missing`, once. *(tests: `TestAManifestDecodesAsTrailryxEncodesIt`,
+    `TestHostileManifestsNeverDecodeAndNeverPanic`, `TestTheStoreRootIsTrailryxVerifysConstruction`,
+    `TestAStoreDirectoryIsReadAsTrailryxNodeReadsIt`, `TestTheWitnessStatementIsTrailryxSignsBytes`,
+    `TestAStoreRootIsAttestedAndAnEquivocationIsCaught`, `TestAMissingRootIsReported`)*
+
+35. **A time-stamp is accepted only when it holds, and asking for one is the
+    operator's opt-in.** RFC 3161: the imprint is SHA-384 of the head, the nonce
+    is the request's, the signed attributes carry the content type, the digest
+    of the TSTInfo as signed and the signing certificate, the signature
+    verifies, and the signer chains to a configured root with time-stamping as
+    its one critical purpose. No authority is called unless
+    `KEYRYX_WITNESS_TSA_URL` names one. *(tests: `TestTheRequestIsRFC3161`,
+    `TestATimestampFromATSAVerifies`, `TestATimestampThatDoesNotHoldIsRefused`,
+    `TestHostileTimestampResponsesNeverParseAndNeverPanic`,
+    `TestTheClientPostsAQueryAndVerifiesTheReply`, `TestAFullWitnessConfigComesUp`)*
+
+36. **Every finding is an agent-event in `keyryx.ndjson`, as SPEC 6.2's keyryx
+    row registers it.** Schema v1.0, source `keyryx`, subject
+    `agent://keyryx.internal/witness`, the registered type and band, one chain;
+    counts and clipped hashes, never record content. *(test:
+    `TestEveryFindingIsAnAgentEventInKeyryxNdjson`)*
+
 ## What must never be added without a conversation
 
 - **A route on any request path**: anything a door, a policy decision point or
@@ -263,6 +355,8 @@ docs or commit messages, as tooling for acting against anyone else.
 - **Any path that signs caller-chosen bytes with the delegation root**, or a key
   statement issued without a proof of possession (invariants 25 and 26).
 - **Custody and witness in one process** (invariant 7).
+- **A witness route that writes**, or a default time-stamping authority: an
+  outbound call to a third party is the operator's opt-in (invariant 35).
 
 ## Tier
 

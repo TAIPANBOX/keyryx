@@ -136,7 +136,7 @@ func TestTheBuiltWitnessCatchesARewriteAndVerifyChecksItsLog(t *testing.T) {
 	ls := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
 	var m map[string]any
 	_ = json.Unmarshal([]byte(ls[0]), &m)
-	m["type"] = "policy_deny"
+	m["type"] = "policy_alloy" // the same length: a stream that shrank is a truncation finding
 	b, _ := json.Marshal(m)
 	ls[0] = string(b)
 	h, _ := event.ChainHashRaw(b)

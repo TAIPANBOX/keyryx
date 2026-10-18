@@ -384,7 +384,7 @@ func TestACheckpointThatDoesNotHoldIsInvalidAndAnUnsignedOneSaysSo(t *testing.T)
 		"a signature by nobody": {true, func(m map[string]any) {
 			m["sig"] = base64.RawURLEncoding.EncodeToString(make([]byte, 64))
 		}, nil, "witness_checkpoint_invalid"},
-		"a kid no statement certifies":            {true, func(m map[string]any) { m["kid"] = "uncertified" }, nil, "witness_checkpoint_invalid"},
+		"a kid no statement certifies":            {true, func(m map[string]any) { m["kid"] = strings.Repeat("A", 43) }, nil, "witness_checkpoint_invalid"},
 		"a key revoked before the witness saw it": {true, nil, func(s *stand) { s.keys.revoked[s.kid] = true }, "witness_checkpoint_invalid"},
 		"a prev that does not chain":              {true, func(m map[string]any) { m["prev"] = "sha256:" + strings.Repeat("2", 64) }, nil, "witness_checkpoint_invalid"},
 		"an unsigned record":                      {false, nil, nil, "witness_checkpoint_unsigned"},
@@ -468,7 +468,8 @@ func TestTheWitnessSurvivesARestartAndCatchesARewriteMadeWhileItWasDown(t *testi
 	s.emit("wardryx.ndjson", 4)
 	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
 	s.tick()
-	s.rewrite("wardryx.ndjson", relinked(t, s.lines("wardryx.ndjson"), 2, func(m map[string]any) { m["type"] = "policy_deny" }))
+	// The same length, so the stream reads as rewritten and not as shrunk.
+	s.rewrite("wardryx.ndjson", relinked(t, s.lines("wardryx.ndjson"), 2, func(m map[string]any) { m["type"] = "policy_alloy" }))
 	s.restart()
 	got := types(s.tick())
 	if f, ok := got["witness_stream_rewritten"]; !ok || f.Data["checkpoint_count"] != int64(4) {

@@ -65,8 +65,11 @@ func TestEveryInclusionProofVerifiesAndNoOtherDoes(t *testing.T) {
 			if n > 1 && VerifyInclusion(ls[i], (i+1)%n, n, p, root) {
 				t.Fatalf("n=%d i=%d: the proof verified at another index", n, i)
 			}
-			if VerifyInclusion(ls[i], i, n+1, p, root) {
-				t.Fatalf("n=%d i=%d: the proof verified for another size", n, i)
+			// A proof is for one (size, root) pair, which a signed head binds
+			// together: in the tree one leaf larger, it does not verify.
+			bigger := append(append([]Hash(nil), ls...), LeafHash([]byte("one more")))
+			if VerifyInclusion(ls[i], i, n+1, p, Root(bigger)) {
+				t.Fatalf("n=%d i=%d: the proof verified in the tree one leaf larger", n, i)
 			}
 			if len(p) > 0 {
 				bad := append([]Hash(nil), p...)
@@ -157,6 +160,20 @@ func TestHostileProofsNeverVerifyAndNeverPanic(t *testing.T) {
 		// answer a random draw can produce.
 		if VerifyConsistency(m, n, random(), Root(ls[:1+i%21]), root) && !(m == n && m > 0 && 1+i%21 == 21) {
 			t.Fatalf("case %d: a random consistency proof verified (m=%d n=%d)", i, m, n)
+		}
+	}
+}
+
+func TestTheFrontierRootIsTheTreeRoot(t *testing.T) {
+	var f Frontier
+	if f.Root() != EmptyRoot() {
+		t.Fatal("an empty frontier is not the empty tree")
+	}
+	ls := leaves(130)
+	for n := 1; n <= len(ls); n++ {
+		f.Add(ls[n-1])
+		if f.Size() != n || f.Root() != Root(ls[:n]) {
+			t.Fatalf("after %d leaves the frontier's root is not the tree's", n)
 		}
 	}
 }

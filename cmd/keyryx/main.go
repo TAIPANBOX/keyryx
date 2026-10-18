@@ -7,15 +7,16 @@
 //	                 short-lived keys of high-rate signers, publishes JWKS
 //	keyryx witness   reads the record read-only, countersigns what it saw,
 //	                 keeps its own append-only log
+//	keyryx verify    checks a witness log or streams and their checkpoints
+//	                 offline, from files only
 //	keyryx version   prints the version this binary was built as
 //
 // Neither role is on an agent's request path: no enforcement point waits on
 // this service to decide anything (CLAUDE.md invariant 1).
 //
-// Custody is built; the witness is not, and asking for it refuses to start
-// rather than starting a service that witnesses nothing and looks healthy
-// (invariant 6). Custody itself refuses to start without its root key, its
-// policy and its data directory, and names the variable it is missing.
+// Each role refuses to start without what it needs and names the variable it
+// is missing (invariant 6); the witness also refuses custody's directory or
+// root key as its own (invariant 7).
 package main
 
 import (
@@ -69,10 +70,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "custody":
 		return custody(stderr)
 	case "witness":
-		// Refusing, not idling: a witness that came up and witnessed nothing
-		// would read as a record nobody rewrote.
-		fmt.Fprintf(stderr, "keyryx: refusing to start: the %s role is not built in this version\n", args[0])
-		return exitRefused
+		return witnessRole(stderr)
+	case "verify":
+		return verify(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "keyryx: unknown command %q\n", args[0])
 		usage(stderr)
@@ -85,7 +85,9 @@ func usage(w io.Writer) {
 
 commands:
   custody   hold keys, sign low-rate statements, certify delegated keys, publish key sets
-  witness   countersign what the record holds, keep an append-only log (not built yet)
+  witness   read the record, say when what it saw is gone, keep a signed log
+  verify    log --dir D --keys F
+            streams --events D --checkpoints D --statements D --roots F
   version   print the version
 `)
 }

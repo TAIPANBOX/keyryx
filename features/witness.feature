@@ -60,6 +60,12 @@ Feature: An independent witness of the record
     When their roots are computed
     Then they are the hashes RFC 9162 defines, a leaf never stands in for a node, and three leaves split two and one
 
+  # @test:TestTheFrontierRootIsTheTreeRoot
+  Scenario: A growing log's root is kept without rehashing every leaf
+    Given a tree grown one leaf at a time to a hundred and thirty
+    When its root is taken from the frontier after each leaf
+    Then it is the root of the whole tree every time
+
   # @test:TestEveryInclusionProofVerifiesAndNoOtherDoes
   Scenario: An inclusion proof proves one leaf at one place in one tree
     Given every leaf of trees of one to thirty-three leaves
@@ -173,6 +179,12 @@ Feature: An independent witness of the record
     Given custody's key set and edited ones
     When each is read
     Then every key is found by its kid with its algorithm, and a private member, a wrong kid or alg, a short key or an unknown type is refused
+
+  # @test:TestTheCustodyClientTakesAKeyOnlyOnAStatementThatHolds
+  Scenario: The witness takes a checkpoint key only on a statement that holds
+    Given custody serving a statement and its delegation root's key set
+    When the witness asks for keys of an uncertified kid, outside the statement's life, revoked before it saw the record, or under another custody's root
+    Then it takes none of them, and takes the honest one and one seen before its revocation
 
   # @test:TestAnHonestStreamIsWitnessedAndRaisesNothing
   Scenario: An honest stack raises nothing
