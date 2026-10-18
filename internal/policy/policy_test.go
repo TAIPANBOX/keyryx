@@ -114,7 +114,7 @@ func TestAMalformedPolicyIsRefused(t *testing.T) {
 		"no version":                   strings.Replace(g, `"version": 1,`, ``, 1),
 		"version 2":                    strings.Replace(g, `"version": 1`, `"version": 2`, 1),
 		"an unknown field":             strings.Replace(g, `"version": 1,`, `"version": 1, "extra": true,`, 1),
-		"an unknown field in a key":    strings.Replace(g, `{"name": "cloud-audit", "alg": "ES256"}`, `{"name": "cloud-audit", "alg": "ES256", "mode": "held"}`, 1),
+		"an unknown field in a key":    strings.Replace(g, `{"name": "cloud-audit", "alg": "ES256"}`, `{"name": "cloud-audit", "alg": "ES256", "curve": "P-256"}`, 1),
 		"trailing data":                g + `{}`,
 		"no keys":                      `{"version": 1, "keys": [], "consumers": []}`,
 		"a duplicate key":              strings.Replace(g, `{"name": "cloud-audit", "alg": "ES256"}`, `{"name": "trailryx-root", "alg": "ES256"}`, 1),

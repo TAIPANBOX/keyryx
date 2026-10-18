@@ -136,11 +136,18 @@ func TestAStatementVerifiesOnlyWithBothHalvesOfItsRoot(t *testing.T) {
 	if edited.Payload == j.Payload {
 		t.Fatal("the payload edit did not apply")
 	}
+	// The ML-DSA half of another statement under the same root: the ES384
+	// half still verifies, so only checking the second half refuses it.
+	st2 := aStatement(t, ecKey(t, elliptic.P256()))
+	j2 := decode(t, signed(t, s, st2))
+	mixed := j
+	mixed.Signatures = append(append(mixed.Signatures[:0:0], j.Signatures[0]), j2.Signatures[1])
 	for name, bad := range map[string][]byte{
-		"the classical half alone": encode(t, one),
-		"the ML-DSA half alone":    encode(t, other),
-		"the halves swapped":       encode(t, swapped),
-		"one byte of the payload":  encode(t, edited),
+		"the ML-DSA half of another statement": encode(t, mixed),
+		"the classical half alone":             encode(t, one),
+		"the ML-DSA half alone":                encode(t, other),
+		"the halves swapped":                   encode(t, swapped),
+		"one byte of the payload":              encode(t, edited),
 	} {
 		if _, err := Verify(bad, StoreRoots(s)); err == nil {
 			t.Errorf("%s: verified", name)

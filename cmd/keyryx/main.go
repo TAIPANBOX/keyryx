@@ -34,8 +34,10 @@ import (
 
 	"github.com/TAIPANBOX/keyryx/internal/api"
 	"github.com/TAIPANBOX/keyryx/internal/auth"
+	"github.com/TAIPANBOX/keyryx/internal/certify"
 	"github.com/TAIPANBOX/keyryx/internal/config"
 	"github.com/TAIPANBOX/keyryx/internal/keystore"
+	"github.com/TAIPANBOX/keyryx/internal/statement"
 	"github.com/TAIPANBOX/keyryx/internal/uselog"
 )
 
@@ -82,7 +84,7 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage: keyryx <command>
 
 commands:
-  custody   hold keys, sign low-rate statements, publish key sets
+  custody   hold keys, sign low-rate statements, certify delegated keys, publish key sets
   witness   countersign what the record holds, keep an append-only log (not built yet)
   version   print the version
 `)
@@ -103,7 +105,13 @@ func custody(stderr io.Writer) int {
 	if err != nil {
 		return refuse(err)
 	}
-	store, err := keystore.Open(cfg.DataDir, cfg.Root, cfg.Policy.Keys, time.Now)
+	// The store holds the keys custody signs with: the policy's held keys and
+	// the two halves of the delegation root. A delegated key is never in it.
+	store, err := keystore.Open(cfg.DataDir, cfg.Root, append(cfg.Policy.HeldKeys(), statement.RootKeys...), time.Now)
+	if err != nil {
+		return refuse(fmt.Errorf("KEYRYX_DATA: %w", err))
+	}
+	certs, err := certify.Open(cfg.DataDir, store, cfg.Policy, cfg.PublishAhead, time.Now)
 	if err != nil {
 		return refuse(fmt.Errorf("KEYRYX_DATA: %w", err))
 	}
@@ -113,7 +121,7 @@ func custody(stderr io.Writer) int {
 	}
 	defer ul.Close()
 	srv := &api.Server{
-		Policy: cfg.Policy, Store: store, Log: ul,
+		Policy: cfg.Policy, Store: store, Certs: certs, Log: ul,
 		Auth:      &auth.Verifier{Policy: cfg.Policy, Issuers: cfg.Issuers, Now: time.Now},
 		AdminKeys: cfg.AdminKeys, PublishAhead: cfg.PublishAhead, Now: time.Now, Version: version,
 	}

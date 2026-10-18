@@ -370,8 +370,7 @@ func TestStatementsSurviveARestartAndAnEditedOneRefusesTheStart(t *testing.T) {
 	}
 	var aFile, cFile string
 	for _, f := range files {
-		raw, _ := os.ReadFile(f)
-		if bytes.Contains(raw, []byte(a.kid)) && strings.Contains(f, "vouchryx-token") {
+		if filepath.Base(f) == a.kid+".json" && strings.Contains(f, "vouchryx-token") {
 			aFile = f
 		}
 		if strings.Contains(f, "wardryx-stream") {
