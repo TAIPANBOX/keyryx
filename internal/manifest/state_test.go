@@ -10,11 +10,36 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 const stateAdminSecret = "manifest-admin-key-0123456789"
+
+// lockedBuffer is a buffer a child process writes into while the test reads it.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func (l *lockedBuffer) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.b.Reset()
+}
 
 // The built binary, with a key an operator revoked and somebody then edited
 // back on disk: after a restart the key stays out of the key set, the state
@@ -44,12 +69,12 @@ func TestTheBuiltCustodyKeepsAnEditedBackKeyOutAndSaysSo(t *testing.T) {
 	addr := freeAddr(t)
 	env := envList(map[string]string{"KEYRYX_DATA": data, "KEYRYX_ROOT_KEY_FILE": rootFile, "KEYRYX_POLICY": pol, "KEYRYX_ADDR": addr,
 		"KEYRYX_ADMIN_KEYS": "sha256:" + hex.EncodeToString(as[:]), "KEYRYX_PUBLISH_AHEAD": "1m"})
-	var stderr bytes.Buffer
+	stderr := &lockedBuffer{}
 	start := func() *exec.Cmd {
 		cmd := exec.Command(bin, "custody")
 		cmd.Env = env
 		stderr.Reset()
-		cmd.Stderr = &stderr
+		cmd.Stderr = stderr
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}

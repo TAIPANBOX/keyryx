@@ -149,7 +149,7 @@ docs or commit messages, as tooling for acting against anyone else.
 19. **A wrapped key opens only under its own root key, name, id and algorithm.**
     HKDF-SHA-384 info and the AES-GCM additional data both carry the three; a
     record whose id is not its public key's thumbprint, or whose private half is
-    not its public key's, refuses the start. *(tests:
+    not its public key's, refuses the start; its state is invariant 30's. *(tests:
     `TestAWrappedKeyOpensOnlyUnderItsOwnRootAndName`, `TestATamperedRecordRefusesToOpen`,
     `TestARecordWhoseKidIsNotItsThumbprintRefusesTheStart`,
     `TestHostileRecordFilesNeverPanicAndNeverSignWithAnUnpublishedKey`)*
@@ -227,6 +227,23 @@ docs or commit messages, as tooling for acting against anyone else.
     the store, a request carrying a private member is refused, and no file
     custody writes holds one. *(tests: `TestACertifiedKeyIsNeverHeld`,
     `TestDelegatedKeysParse`, `TestHostileKeysAreRefused`)*
+
+30. **A key's state and a statement's revoked state on disk are custody's own
+    word.** Each record carries an HMAC-SHA-256 over every member but itself,
+    under a key derived by HKDF-SHA-384 from the root key (salt and info
+    `keyryx/state/v1`), length-prefixed and tagged with the kind of record. A
+    record whose MAC is missing, does not hold, or that predates it (version 1)
+    is treated as revoked: it is neither published nor used, it is alarmed on
+    stderr, on the use log (`state_alarm`) and in `GET /v1/state` at every
+    start, and its file is left as it was found. An admin revoking that key
+    acknowledges the alarm. What the MAC does not stop is the return of an
+    earlier record custody itself wrote. *(tests:
+    `TestAnEditedKeyStateIsTreatedAsRevokedAndRaisesAnAlarm`,
+    `TestAnEditedActiveKeyIsReplacedNotUsed`, `TestRevokingAnAlarmedKeyAcknowledgesIt`,
+    `TestAStateMACMadeWithoutTheRootDoesNotHold`,
+    `TestAnEditedStatementStateIsTreatedAsRevokedAndRaisesAnAlarm`,
+    `TestRevokingAnAlarmedStatementAcknowledgesIt`, `TestTheStateRouteNamesEveryAlarm`,
+    `TestTheBuiltCustodyKeepsAnEditedBackKeyOutAndSaysSo`)*
 
 ## What must never be added without a conversation
 

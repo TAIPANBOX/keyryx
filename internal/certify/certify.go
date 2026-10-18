@@ -27,7 +27,9 @@ package certify
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,6 +38,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -88,6 +91,9 @@ type entry struct {
 	st      statement.Statement
 	raw     []byte
 	revoked int64
+	// stateBad marks a record whose state MAC did not hold: revoked in
+	// memory, alarmed, its file left as it was found.
+	stateBad bool
 }
 
 type challenge struct {
@@ -106,6 +112,7 @@ type Registry struct {
 	byKid      map[string]*entry
 	byName     map[string][]*entry
 	challenges map[string]challenge
+	alarms     []keystore.Alarm
 }
 
 var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -114,6 +121,18 @@ type fileRec struct {
 	Revoked   int64           `json:"revoked"`
 	Statement json.RawMessage `json:"statement"`
 	V         int             `json:"v"`
+	MAC       string          `json:"mac,omitempty"`
+}
+
+// recordVersion is the statement record format: 2 carries the state MAC.
+const recordVersion = 2
+
+// stateFields is what a statement record's state MAC covers: the version,
+// the name and kid it certifies, when it was revoked, and the digest of the
+// statement itself, so a MAC from one record never stands for another.
+func stateFields(v int, name, kid string, revoked int64, raw []byte) []string {
+	sum := sha256.Sum256(raw)
+	return []string{strconv.Itoa(v), name, kid, strconv.FormatInt(revoked, 10), hex.EncodeToString(sum[:])}
 }
 
 // Open reads every issued statement under dir/statements and verifies each
@@ -142,9 +161,13 @@ func Open(dir string, store *keystore.Store, p *policy.Policy, ahead time.Durati
 			if strings.HasPrefix(f.Name(), ".tmp-") {
 				continue // a write that died before its rename
 			}
-			e, err := load(filepath.Join(base, n.Name(), f.Name()), n.Name(), f.Name(), roots)
+			e, reason, err := r.load(filepath.Join(base, n.Name(), f.Name()), n.Name(), f.Name(), roots)
 			if err != nil {
 				return nil, err
+			}
+			if reason != "" {
+				e.stateBad, e.revoked = true, now().Unix()
+				r.alarms = append(r.alarms, keystore.Alarm{Kind: "statement", Name: e.st.Name, Kid: e.st.Kid, Reason: reason})
 			}
 			if r.byKid[e.st.Kid] != nil {
 				return nil, fmt.Errorf("two statements certify %s; this service certifies a key once", e.st.Kid)
@@ -156,13 +179,16 @@ func Open(dir string, store *keystore.Store, p *policy.Policy, ahead time.Durati
 	return r, nil
 }
 
-func load(path, dirName, file string, roots statement.RootKey) (*entry, error) {
-	refuse := func(why string) (*entry, error) {
-		return nil, fmt.Errorf("the statement %s %s; this service never writes one", path, why)
+// load reads one statement record. A statement that does not verify, or is
+// filed wrong, refuses the open; a state the store's MAC does not vouch for
+// is returned with its reason, for the caller to treat as revoked and alarm.
+func (r *Registry) load(path, dirName, file string, roots statement.RootKey) (*entry, string, error) {
+	refuse := func(why string) (*entry, string, error) {
+		return nil, "", fmt.Errorf("the statement %s %s; this service never writes one", path, why)
 	}
 	raw, err := os.ReadFile(path) // #nosec G304 -- a file in this service's own data directory
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -173,8 +199,8 @@ func load(path, dirName, file string, roots statement.RootKey) (*entry, error) {
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return refuse("carries data after its record")
 	}
-	if rec.V != 1 || rec.Revoked < 0 || rec.Statement == nil {
-		return refuse("is not a version 1 record")
+	if (rec.V != 1 && rec.V != recordVersion) || rec.Revoked < 0 || rec.Statement == nil {
+		return refuse("is not a record of a version this service writes")
 	}
 	st, err := statement.Verify(rec.Statement, roots)
 	if err != nil {
@@ -183,7 +209,14 @@ func load(path, dirName, file string, roots statement.RootKey) (*entry, error) {
 	if st.Name != dirName || st.Kid+".json" != file {
 		return refuse("is filed under another name or key id than it certifies")
 	}
-	return &entry{st: st, raw: []byte(rec.Statement), revoked: rec.Revoked}, nil
+	reason := ""
+	if rec.V < recordVersion {
+		reason = "state_unauthenticated"
+	} else if mac, err := base64.RawURLEncoding.Strict().DecodeString(rec.MAC); err != nil ||
+		!r.store.StateMACValid(mac, "statement", stateFields(rec.V, st.Name, st.Kid, rec.Revoked, rec.Statement)...) {
+		reason = "state_mac_mismatch"
+	}
+	return &entry{st: st, raw: []byte(rec.Statement), revoked: rec.Revoked}, reason, nil
 }
 
 func (r *Registry) delegated(name string) (policy.Key, bool) {
@@ -341,7 +374,9 @@ func (r *Registry) Delegate(consumer, name string, req Request, record func(stat
 
 // persist writes a statement record atomically.
 func (r *Registry) persist(e *entry) error {
-	b, err := json.Marshal(fileRec{Revoked: e.revoked, Statement: e.raw, V: 1})
+	rec := fileRec{Revoked: e.revoked, Statement: e.raw, V: recordVersion}
+	rec.MAC = base64.RawURLEncoding.EncodeToString(r.store.StateMAC("statement", stateFields(rec.V, e.st.Name, e.st.Kid, rec.Revoked, rec.Statement)...))
+	b, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
@@ -423,19 +458,38 @@ func (r *Registry) Revoke(kid string) (statement.Statement, error) {
 	if e == nil {
 		return statement.Statement{}, ErrUnknownKid
 	}
-	if e.revoked != 0 {
+	if e.revoked != 0 && !e.stateBad {
 		return e.st, nil
 	}
-	e.revoked = r.now().Unix()
+	was := e.revoked
+	if e.revoked == 0 {
+		e.revoked = r.now().Unix()
+	}
+	// For an alarmed statement this is the operator's acknowledgement: the
+	// record is rewritten as revoked, under a MAC, and the alarm cleared.
 	if err := r.persist(e); err != nil {
-		e.revoked = 0
+		e.revoked = was
 		return statement.Statement{}, err
+	}
+	if e.stateBad {
+		e.stateBad = false
+		kept := r.alarms[:0]
+		for _, a := range r.alarms {
+			if a.Kid != kid {
+				kept = append(kept, a)
+			}
+		}
+		r.alarms = kept
 	}
 	return e.st, nil
 }
 
-// Alarms lists the statement states custody could not vouch for. Scaffold.
-func (r *Registry) Alarms() []keystore.Alarm { return nil }
+// Alarms lists the statement states custody could not vouch for.
+func (r *Registry) Alarms() []keystore.Alarm {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]keystore.Alarm(nil), r.alarms...)
+}
 
 // Inventory lists every statement, revoked ones included, by name then age.
 func (r *Registry) Inventory() []Entry {

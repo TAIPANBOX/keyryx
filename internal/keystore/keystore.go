@@ -35,12 +35,14 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/hkdf"
+	"crypto/hmac"
 	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,6 +51,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -110,8 +113,11 @@ var nameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 // held is one key with its private half. Unexported, never serialised.
 type held struct {
 	rec Record
-	ec  *ecdsa.PrivateKey
-	ml  *mldsa.PrivateKey
+	// stateBad marks a record whose state MAC did not hold: it is revoked
+	// in memory, alarmed, and its file is left as it was found.
+	stateBad bool
+	ec       *ecdsa.PrivateKey
+	ml       *mldsa.PrivateKey
 }
 
 // Store is the key store. Safe for concurrent use.
@@ -122,6 +128,8 @@ type Store struct {
 	now      func() time.Time
 	declared map[string]policy.Alg
 	keys     map[string][]*held
+	stateKey [32]byte
+	alarms   []Alarm
 }
 
 // Open reads every stored key, checks each whole, and creates an active key
@@ -142,6 +150,11 @@ func Open(dir string, root [32]byte, keys []policy.Key, now func() time.Time) (*
 		return nil, errors.New("the root key is all zero")
 	}
 	s := &Store{dir: dir, root: root, now: now, declared: map[string]policy.Alg{}, keys: map[string][]*held{}}
+	sk, err := hkdf.Key(sha512.New384, root[:], []byte(stateSalt), stateInfo, 32)
+	if err != nil {
+		return nil, err
+	}
+	copy(s.stateKey[:], sk)
 	for _, k := range keys {
 		s.declared[k.Name] = k.Alg
 	}
@@ -204,20 +217,64 @@ func Open(dir string, root [32]byte, keys []policy.Key, now func() time.Time) (*
 	return s, nil
 }
 
-// Alarm is a state custody could not vouch for. Scaffold.
+// Alarm is a state custody found on disk and could not vouch for: a key
+// record or a statement whose state MAC is missing or does not hold. The key
+// it names is treated as revoked (CLAUDE.md invariant 30).
 type Alarm struct {
-	Kind, Name, Kid, Reason string
+	Kind   string `json:"kind"`
+	Name   string `json:"name"`
+	Kid    string `json:"kid"`
+	Reason string `json:"reason"`
 }
 
+// The state MAC key is derived from the root key, apart from every wrapping
+// key, so a writer of the data directory without the root key cannot make a
+// state custody will vouch for.
 const (
 	stateSalt = "keyryx/state/v1"
 	stateInfo = "keyryx/state/v1"
+	// recordVersion is the record format: 2 carries the state MAC.
+	recordVersion = 2
 )
 
-// Alarms lists the states custody could not vouch for. Scaffold: none.
-func (s *Store) Alarms() []Alarm { return nil }
+// Alarms lists the states custody could not vouch for.
+func (s *Store) Alarms() []Alarm {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Alarm(nil), s.alarms...)
+}
 
-func keyStateInput(f recordFile) []byte { return nil }
+// stateInput is what a state MAC covers: a domain, a kind, then the fields,
+// each length-prefixed so no field can borrow from its neighbour.
+func stateInput(kind string, fields ...string) []byte {
+	var out []byte
+	for _, f := range append([]string{stateSalt, kind}, fields...) {
+		out = binary.BigEndian.AppendUint64(out, uint64(len(f)))
+		out = append(out, f...)
+	}
+	return out
+}
+
+// keyStateInput covers every member of a key record but the MAC itself.
+func keyStateInput(f recordFile) []byte {
+	i := func(n int64) string { return strconv.FormatInt(n, 10) }
+	return stateInput("key", strconv.Itoa(f.V), f.Name, f.Kid, f.Alg, f.State, i(f.Created), i(f.ActivateAt), i(f.Retired), i(f.Revoked),
+		f.Public, f.Nonce, f.Wrapped)
+}
+
+// StateMAC is the MAC of fields under the store's state key, for the
+// registry's statement records. kind keeps one kind of record's MAC from
+// standing for another's.
+func (s *Store) StateMAC(kind string, fields ...string) []byte {
+	m := hmac.New(sha256.New, s.stateKey[:])
+	m.Write(stateInput(kind, fields...))
+	return m.Sum(nil)
+}
+
+// StateMACValid compares mac with the MAC of fields in constant time.
+func (s *Store) StateMACValid(mac []byte, kind string, fields ...string) bool {
+	return hmac.Equal(mac, s.StateMAC(kind, fields...))
+}
 
 type recordFile struct {
 	V          int    `json:"v"`
@@ -232,6 +289,7 @@ type recordFile struct {
 	Public     string `json:"public"`
 	Nonce      string `json:"nonce"`
 	Wrapped    string `json:"wrapped"`
+	MAC        string `json:"mac,omitempty"`
 }
 
 func fileName(kid string) string { return strings.ReplaceAll(kid, ":", "_") + ".json" }
@@ -257,8 +315,8 @@ func (s *Store) load(dirName, file string) (*held, error) {
 	alg := policy.Alg(f.Alg)
 	state := State(f.State)
 	switch {
-	case f.V != 1:
-		return refuse("is not version 1")
+	case f.V != 1 && f.V != recordVersion:
+		return refuse("is not a version this service writes")
 	case f.Name != dirName:
 		return refuse("names another key than the directory it is in")
 	case alg != policy.ES256 && alg != policy.ES384 && alg != policy.MLDSA65:
@@ -301,7 +359,27 @@ func (s *Store) load(dirName, file string) (*held, error) {
 	if !equalBytes(h.publicBytes(), pub) {
 		return refuse("holds a private key that is not its public key's other half")
 	}
+	// The key material is genuine; whether its state is custody's own word
+	// is a separate question. A state custody cannot vouch for is treated as
+	// revoked and alarmed, and the file is left as evidence.
+	reason := ""
+	if f.V < recordVersion {
+		reason = "state_unauthenticated"
+	} else if mac, err := base64.RawURLEncoding.Strict().DecodeString(f.MAC); err != nil || !hmac.Equal(mac, s.keyMAC(f)) {
+		reason = "state_mac_mismatch"
+	}
+	if reason != "" {
+		h.stateBad = true
+		h.rec.State, h.rec.Revoked = Revoked, s.now().Unix()
+		s.alarms = append(s.alarms, Alarm{Kind: "key", Name: h.rec.Name, Kid: h.rec.Kid, Reason: reason})
+	}
 	return h, nil
+}
+
+func (s *Store) keyMAC(f recordFile) []byte {
+	m := hmac.New(sha256.New, s.stateKey[:])
+	m.Write(keyStateInput(f))
+	return m.Sum(nil)
 }
 
 func equalBytes(a, b []byte) bool { return string(a) == string(b) }
@@ -461,11 +539,12 @@ func (s *Store) persist(h *held) error {
 	if err != nil {
 		return err
 	}
-	f := recordFile{V: 1, Name: h.rec.Name, Kid: h.rec.Kid, Alg: string(h.rec.Alg), State: string(h.rec.State),
+	f := recordFile{V: recordVersion, Name: h.rec.Name, Kid: h.rec.Kid, Alg: string(h.rec.Alg), State: string(h.rec.State),
 		Created: h.rec.Created, ActivateAt: h.rec.ActivateAt, Retired: h.rec.Retired, Revoked: h.rec.Revoked,
 		Public:  base64.RawURLEncoding.EncodeToString(h.rec.Public),
 		Nonce:   base64.RawURLEncoding.EncodeToString(nonce),
 		Wrapped: base64.RawURLEncoding.EncodeToString(wrapped)}
+	f.MAC = base64.RawURLEncoding.EncodeToString(s.keyMAC(f))
 	b, err := json.Marshal(f)
 	if err != nil {
 		return err
@@ -768,7 +847,23 @@ func (s *Store) Revoke(kid string) (Record, error) {
 			if h.rec.Kid != kid {
 				continue
 			}
-			if h.rec.State == Revoked {
+			if h.rec.State == Revoked && !h.stateBad {
+				return h.rec, nil
+			}
+			if h.stateBad {
+				// An operator revoking an alarmed key acknowledges the
+				// alarm: the record is rewritten as revoked, under a MAC.
+				if err := s.persist(h); err != nil {
+					return Record{}, err
+				}
+				h.stateBad = false
+				kept := s.alarms[:0]
+				for _, a := range s.alarms {
+					if a.Kid != kid {
+						kept = append(kept, a)
+					}
+				}
+				s.alarms = kept
 				return h.rec, nil
 			}
 			wasActive := h.rec.State == Active

@@ -120,6 +120,15 @@ func custody(stderr io.Writer) int {
 		return refuse(fmt.Errorf("KEYRYX_DATA: %w", err))
 	}
 	defer ul.Close()
+	// A state custody could not vouch for is treated as revoked; it is said
+	// on stderr and written on the use log at every start until an admin
+	// revokes the key it names.
+	for _, a := range append(store.Alarms(), certs.Alarms()...) {
+		fmt.Fprintf(stderr, "keyryx: ALARM: the %s %s %s has a state custody did not write (%s); it is treated as revoked until an admin revokes it\n", a.Kind, a.Name, a.Kid, a.Reason)
+		if err := ul.Append(uselog.Entry{At: time.Now().Unix(), Consumer: "keyryx", Op: "state_alarm", Key: a.Name, Kid: a.Kid, Purpose: a.Reason}); err != nil {
+			return refuse(fmt.Errorf("KEYRYX_DATA: the use log does not take the alarm: %w", err))
+		}
+	}
 	srv := &api.Server{
 		Policy: cfg.Policy, Store: store, Certs: certs, Log: ul,
 		Auth:      &auth.Verifier{Policy: cfg.Policy, Issuers: cfg.Issuers, Now: time.Now},

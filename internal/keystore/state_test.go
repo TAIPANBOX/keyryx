@@ -91,35 +91,35 @@ func TestAnEditedKeyStateIsTreatedAsRevokedAndRaisesAnAlarm(t *testing.T) {
 	if len(s.Alarms()) != 0 || published(s, "approval")[revoked] || !published(s, "approval")[active] {
 		t.Fatalf("control: alarms %v, published %v", s.Alarms(), published(s, "approval"))
 	}
-	other := func(dir string) string { // a MAC from another record of the same store
+	other := func(dir, active string) string { // a MAC from another record of the same store
 		_, r := recordOf(t, dir, active)
 		m, _ := r["mac"].(string)
 		return m
 	}
 	for what, c2 := range map[string]struct {
 		kid  func(revoked, active string) string
-		edit func(dir string, r map[string]any)
+		edit func(dir, active string, r map[string]any)
 	}{
-		"a revoked key edited back to retired": {func(r, _ string) string { return r }, func(_ string, r map[string]any) {
+		"a revoked key edited back to retired": {func(r, _ string) string { return r }, func(_, _ string, r map[string]any) {
 			r["state"], r["revoked"], r["retired"] = "retired", 0, t0.Unix()
 		}},
-		"a revoked key edited back to active, the active one to retired": {func(r, _ string) string { return r }, func(_ string, r map[string]any) {
+		"a revoked key edited back to active, the active one to retired": {func(r, _ string) string { return r }, func(_, _ string, r map[string]any) {
 			r["state"], r["revoked"] = "active", 0
 		}},
-		"the revocation time moved":       {func(r, _ string) string { return r }, func(_ string, r map[string]any) { r["revoked"] = t0.Add(time.Hour).Unix() }},
-		"the creation time moved":         {func(_, a string) string { return a }, func(_ string, r map[string]any) { r["created"] = t0.Add(-time.Hour).Unix() }},
-		"the activation time moved":       {func(_, a string) string { return a }, func(_ string, r map[string]any) { r["activate_at"] = t0.Add(time.Hour).Unix() }},
-		"the retirement time moved":       {func(_, a string) string { return a }, func(_ string, r map[string]any) { r["retired"] = t0.Unix() }},
-		"the MAC removed":                 {func(_, a string) string { return a }, func(_ string, r map[string]any) { delete(r, "mac") }},
-		"the MAC not base64url":           {func(_, a string) string { return a }, func(_ string, r map[string]any) { r["mac"] = "***" }},
-		"the MAC of another record":       {func(r, _ string) string { return r }, func(dir string, r map[string]any) { r["mac"] = other(dir) }},
-		"a version 1 record with no MAC":  {func(_, a string) string { return a }, func(_ string, r map[string]any) { r["v"] = 1; delete(r, "mac") }},
-		"a version 1 record with its MAC": {func(_, a string) string { return a }, func(_ string, r map[string]any) { r["v"] = 1 }},
+		"the revocation time moved":       {func(r, _ string) string { return r }, func(_, _ string, r map[string]any) { r["revoked"] = t0.Add(time.Hour).Unix() }},
+		"the creation time moved":         {func(_, a string) string { return a }, func(_, _ string, r map[string]any) { r["created"] = t0.Add(-time.Hour).Unix() }},
+		"the activation time moved":       {func(_, a string) string { return a }, func(_, _ string, r map[string]any) { r["activate_at"] = t0.Add(time.Hour).Unix() }},
+		"the retirement time moved":       {func(_, a string) string { return a }, func(_, _ string, r map[string]any) { r["retired"] = t0.Unix() }},
+		"the MAC removed":                 {func(_, a string) string { return a }, func(_, _ string, r map[string]any) { delete(r, "mac") }},
+		"the MAC not base64url":           {func(_, a string) string { return a }, func(_, _ string, r map[string]any) { r["mac"] = "***" }},
+		"the MAC of another record":       {func(r, _ string) string { return r }, func(dir, active string, r map[string]any) { r["mac"] = other(dir, active) }},
+		"a version 1 record with no MAC":  {func(_, a string) string { return a }, func(_, _ string, r map[string]any) { r["v"] = 1; delete(r, "mac") }},
+		"a version 1 record with its MAC": {func(_, a string) string { return a }, func(_, _ string, r map[string]any) { r["v"] = 1 }},
 	} {
 		dir, revoked, active := aRevokedKey(t, c)
 		kid := c2.kid(revoked, active)
 		path, r := recordOf(t, dir, kid)
-		c2.edit(dir, r)
+		c2.edit(dir, active, r)
 		writeRecord(t, path, r)
 		s, err := Open(dir, rootA, declared[:1], c.Now)
 		if err != nil {
