@@ -2,7 +2,9 @@ package wlog
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	mrand "math/rand/v2"
 	"os"
@@ -221,6 +223,45 @@ func TestATornLastLineIsDiscardedAndTheLogContinues(t *testing.T) {
 	s.reopen(t)
 	if s.log.Size() != 5 || len(s.log.Heads()) != 2 {
 		t.Fatalf("the log did not continue: %d leaves, %d heads", s.log.Size(), len(s.log.Heads()))
+	}
+	// Entries written and never signed, as a crash between the two leaves
+	// them, are nobody's word: they are dropped and observed again.
+	if err := s.log.Append(entry(5), entry(6)); err != nil {
+		t.Fatal(err)
+	}
+	s.reopen(t)
+	if s.log.Size() != 5 {
+		t.Fatalf("entries no head covers were kept: %d leaves", s.log.Size())
+	}
+}
+
+// A head signed by the witness's own key with a time before the head it
+// follows: the signature holds, so only the order refuses it.
+func TestAHeadThatGoesBackInTimeRefusesTheStart(t *testing.T) {
+	s := newStand(t)
+	h1 := s.grow(t, 0, 2)
+	if err := s.log.Append(entry(2)); err != nil {
+		t.Fatal(err)
+	}
+	root := merkle.Root(s.log.Leaves())
+	h := Head{Size: 3, Root: hex.EncodeToString(root[:]), At: h1.At - 60}
+	in := HeadInput(h.Size, root, h.At)
+	for _, half := range []struct {
+		name string
+		into *Sig
+	}{{KeyES384, &h.ES384}, {KeyMLDSA, &h.MLDSA65}} {
+		sig, err := s.store.SignInput(half.name, func(policy.Alg, string) ([]byte, error) { return in, nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+		*half.into = Sig{Kid: sig.Kid, Sig: base64.RawURLEncoding.EncodeToString(sig.Sig)}
+	}
+	line, _ := json.Marshal(h)
+	f, _ := os.OpenFile(filepath.Join(s.dir, HeadsFile), os.O_APPEND|os.O_WRONLY, 0o600)
+	_, _ = f.Write(append(line, '\n'))
+	_ = f.Close()
+	if _, err := Open(s.dir, statement.StoreKeys(s.store, KeyES384, KeyMLDSA), func() time.Time { return s.now }); err == nil {
+		t.Fatal("a head earlier than the one before it opened")
 	}
 }
 

@@ -78,6 +78,12 @@ Feature: An independent witness of the record
     When the proof is checked from another old root, to a rewritten tree, or edited
     Then only the honest proof verifies
 
+  # @test:TestAProofTooShortForItsSizeDoesNotVerify
+  Scenario: A proof that stops short does not verify
+    Given inclusion and consistency proofs one node short, claimed with the inner node they reach as the root
+    When each is checked
+    Then none verifies, and the full proof does
+
   # @test:TestHostileProofsNeverVerifyAndNeverPanic
   Scenario: A random proof never verifies
     Given three thousand random proofs, indices and sizes
@@ -162,6 +168,12 @@ Feature: An independent witness of the record
     When the log is opened and grows
     Then the half lines are gone and the log continues
 
+  # @test:TestAHeadThatGoesBackInTimeRefusesTheStart
+  Scenario: A head that goes back in time refuses the start
+    Given a later head signed by the witness's own key with a time before the head it follows
+    When the log is opened
+    Then it is refused
+
   # @test:TestHostileLogFilesNeverPanicAndNeverOpenInconsistent
   Scenario: A damaged witness log never opens inconsistent
     Given fifteen hundred random edits of the log
@@ -209,6 +221,18 @@ Feature: An independent witness of the record
     Given a new chain started mid-stream, with and without a resume checkpoint at the line before
     When the witness reads it
     Then it is medium with the resume and high without, naming the line
+
+  # @test:TestALineLinkedElsewhereIsARestart
+  Scenario: A line linked to another line is a restart
+    Given an appended line whose prev_hash names something other than the line before it
+    When the witness reads it
+    Then it is a high restart at that line, and not a rewrite
+
+  # @test:TestACheckpointFileRewrittenIsReported
+  Scenario: A checkpoint file rewritten after it was read is reported
+    Given two accepted checkpoints, the first edited afterwards
+    When the witness reads again
+    Then the rewrite is an invalid checkpoint finding, once
 
   # @test:TestAKeptCheckpointCatchesARewriteTheProducerSignedAfter
   Scenario: A checkpoint the witness kept catches what the producer signed after

@@ -629,3 +629,44 @@ func TestHostileStreamsNeverPanic(t *testing.T) {
 		}
 	}
 }
+
+// A line whose prev_hash names something other than the line before it is a
+// chain restarted there, even though every byte before it is untouched.
+func TestALineLinkedElsewhereIsARestart(t *testing.T) {
+	s := newStand(t, nil)
+	s.emit("wardryx.ndjson", 3)
+	s.tick()
+	f, _ := os.OpenFile(s.streamPath("wardryx.ndjson"), os.O_APPEND|os.O_WRONLY, 0o644)
+	_, _ = f.WriteString(`{"agent_id":"agent://acme.example/one","prev_hash":"sha256:` + strings.Repeat("ab", 32) + `","schema":"taipanbox.dev/agent-event/v1.0","source":"wardryx","ts":"2026-10-18T12:05:00Z","type":"policy_allow"}` + "\n")
+	_ = f.Close()
+	got := types(s.tick())
+	if f, ok := got["witness_chain_restarted"]; !ok || f.Data["line"] != int64(4) || f.Severity != "high" {
+		t.Fatalf("a line linked to a line that is not its predecessor: %+v", got)
+	}
+	if _, ok := got["witness_stream_rewritten"]; ok {
+		t.Fatal("an append was reported as a rewrite")
+	}
+}
+
+// The checkpoint file is append-only too: a record the witness already read,
+// edited afterwards, is reported, though nothing re-verifies the old record.
+func TestACheckpointFileRewrittenIsReported(t *testing.T) {
+	s := newStand(t, nil)
+	s.emit("wardryx.ndjson", 2)
+	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
+	s.emit("wardryx.ndjson", 2)
+	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
+	if got := s.tick(); len(got) != 0 {
+		t.Fatalf("control: %+v", got)
+	}
+	path := filepath.Join(s.ckpts, "wardryx.ndjson.ckpt.ndjson")
+	raw, _ := os.ReadFile(path)
+	_ = os.WriteFile(path, bytes.Replace(raw, []byte(`"count":2`), []byte(`"count":1`), 1), 0o644)
+	got := types(s.tick())
+	if f, ok := got["witness_checkpoint_invalid"]; !ok || !strings.Contains(fmt.Sprint(f.Data["reason"]), "rewritten") {
+		t.Fatalf("an accepted checkpoint edited afterwards: %+v", got)
+	}
+	if got := s.tick(); len(got) != 0 {
+		t.Fatalf("one rewrite was reported again: %+v", got)
+	}
+}

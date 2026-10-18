@@ -287,7 +287,8 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestAKeptCheckpointCatchesARewriteTheProducerSignedAfter`,
     `TestARestartIsMediumWhenAResumeExplainsItAndHighWhenNothingDoes`,
     `TestTheCustodyClientTakesAKeyOnlyOnAStatementThatHolds`,
-    `TestVerifyStreamsChecksCheckpointsAgainstTheirStatements`)*
+    `TestVerifyStreamsChecksCheckpointsAgainstTheirStatements`,
+    `TestALineLinkedElsewhereIsARestart`, `TestACheckpointFileRewrittenIsReported`)*
 
 33. **The witness's own log is an RFC 9162 Merkle tree over SHA-384, and every
     head is signed by both halves of its key.** An entry per observation, a
@@ -299,8 +300,8 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestTheRootsRFC9162Specifies`, `TestTheFrontierRootIsTheTreeRoot`,
     `TestEveryInclusionProofVerifiesAndNoOtherDoes`,
     `TestEveryConsistencyProofVerifiesAndNoOtherDoes`,
-    `TestHostileProofsNeverVerifyAndNeverPanic`,
-    `TestTheLogIsAMerkleTreeAndEveryHeadIsSignedByBothHalves`,
+    `TestHostileProofsNeverVerifyAndNeverPanic`, `TestAProofTooShortForItsSizeDoesNotVerify`,
+    `TestTheLogIsAMerkleTreeAndEveryHeadIsSignedByBothHalves`, `TestAHeadThatGoesBackInTimeRefusesTheStart`,
     `TestAnEditedLogOrHeadRefusesTheStart`, `TestATornLastLineIsDiscardedAndTheLogContinues`,
     `TestHostileLogFilesNeverPanicAndNeverOpenInconsistent`,
     `TestVerifyDirSaysOkBrokenOrMeasuredNothing`, `TestTheWitnessRoutesServeProofsThatVerify`,

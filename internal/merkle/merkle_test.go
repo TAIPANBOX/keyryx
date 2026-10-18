@@ -177,3 +177,26 @@ func TestTheFrontierRootIsTheTreeRoot(t *testing.T) {
 		}
 	}
 }
+
+// A proof that stops short reaches an inner node, not the root: claiming the
+// larger size with that inner node as the root must not verify (RFC 9162
+// ends verification only when the size is used up).
+func TestAProofTooShortForItsSizeDoesNotVerify(t *testing.T) {
+	ls := leaves(5)
+	a, b := ls[0], ls[1]
+	if VerifyInclusion(a, 0, 3, []Hash{b}, NodeHash(a, b)) {
+		t.Fatal("a two-leaf proof verified for a tree of three")
+	}
+	p5, _ := InclusionProof(ls, 0)
+	if VerifyInclusion(a, 0, 5, p5[:len(p5)-1], Root(ls[:4])) {
+		t.Fatal("a four-leaf proof verified for a tree of five")
+	}
+	for _, m := range []int{1, 2, 4} {
+		if VerifyConsistency(m, m+1, nil, Root(ls[:m]), Root(ls[:m])) {
+			t.Fatalf("an empty proof took a tree of %d to one of %d with the same root", m, m+1)
+		}
+	}
+	if p, _ := InclusionProof(ls[:3], 0); !VerifyInclusion(a, 0, 3, p, Root(ls[:3])) {
+		t.Fatal("control: the full proof")
+	}
+}
