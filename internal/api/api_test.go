@@ -358,7 +358,8 @@ func TestTheRouteTableIsTheMux(t *testing.T) {
 		}
 		switch r.Access {
 		case "public":
-			if w.Code >= 400 {
+			// A public route keyed by an id answers 404 for an id nobody issued.
+			if w.Code >= 400 && !(w.Code == http.StatusNotFound && strings.Contains(r.Pattern, "{kid}")) {
 				t.Errorf("%s %s is public and refused a caller with no credential: %d", r.Method, r.Pattern, w.Code)
 			}
 		case "consumer", "admin":

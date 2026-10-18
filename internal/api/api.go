@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/TAIPANBOX/keyryx/internal/auth"
+	"github.com/TAIPANBOX/keyryx/internal/certify"
 	"github.com/TAIPANBOX/keyryx/internal/keystore"
 	"github.com/TAIPANBOX/keyryx/internal/policy"
 	"github.com/TAIPANBOX/keyryx/internal/uselog"
@@ -56,6 +57,7 @@ func Routes() []Route { return slices.Clone(routes) }
 type Server struct {
 	Policy       *policy.Policy
 	Store        *keystore.Store
+	Certs        *certify.Registry
 	Log          *uselog.Log
 	Auth         *auth.Verifier
 	AdminKeys    [][32]byte

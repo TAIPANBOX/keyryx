@@ -668,6 +668,15 @@ func (s *Store) Inventory() []Record {
 	return out
 }
 
+// Active returns the active record of name. Scaffold.
+func (s *Store) Active(name string) (Record, bool) { return Record{}, false }
+
+// SignInput signs, with the active key of name, what build returns for that
+// key's algorithm and id. Scaffold.
+func (s *Store) SignInput(name string, build func(alg policy.Alg, kid string) ([]byte, error)) (Signature, error) {
+	return Signature{}, errors.New("keystore: not implemented")
+}
+
 // Rotate creates the next key of name, published now and signing after ahead.
 func (s *Store) Rotate(name string, ahead time.Duration) (Record, error) {
 	s.mu.Lock()

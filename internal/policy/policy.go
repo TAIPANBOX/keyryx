@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Alg names a signature algorithm a key is created for.
@@ -42,11 +43,35 @@ func (a Alg) valid() bool { return a == ES256 || a == ES384 || a == MLDSA65 }
 // that cannot climb, hide or carry a separator.
 var name = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
+// Mode says whether custody holds a key or certifies one its consumer holds.
+type Mode string
+
+const (
+	Held      Mode = "held"
+	Delegated Mode = "delegated"
+	// OpDelegate is the grant to have a key of a delegated name certified.
+	OpDelegate = "delegate"
+	// DefaultOverlap is how long a delegated key stays published after its
+	// not_after when the policy states no overlap.
+	DefaultOverlap = 10 * time.Minute
+	// ReservedPrefix is the service's own name space (the delegation root).
+	ReservedPrefix = "keyryx."
+)
+
 // Key is one declared key.
 type Key struct {
-	Name string
-	Alg  Alg
+	Name        string
+	Alg         Alg
+	Mode        Mode
+	MaxLifetime time.Duration
+	Overlap     time.Duration
 }
+
+// HeldKeys lists the keys custody holds. Scaffold: every key.
+func (p *Policy) HeldKeys() []Key { return p.Keys }
+
+// Reserved reports whether name is in the service's own name space. Scaffold.
+func Reserved(name string) bool { return false }
 
 // Consumer is one declared consumer and how it authenticates. Exactly one of
 // Socket, HasKeyDigest and K8sIssuer is set.

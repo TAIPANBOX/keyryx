@@ -614,3 +614,36 @@ func TestAnUndeclaredKeyOnDiskIsPublishedAndNeverSigns(t *testing.T) {
 }
 
 var _ = ecdsa.PublicKey{}
+
+// The delegation root signs key statements, and a statement is what every
+// verifier of a delegated key trusts. So the sign-on-request path never signs
+// with a key in the service's reserved space, even one the store holds: a
+// policy cannot grant one, and the store refuses it if one ever were.
+func TestTheStoreNeverSignsARequestWithAReservedKey(t *testing.T) {
+	c := &clock{t0}
+	reserved := []policy.Key{{Name: "keyryx.delegation-root.es384", Alg: policy.ES384}, {Name: "keyryx.delegation-root.ml-dsa-65", Alg: policy.MLDSA65}}
+	s := open(t, dataDir(t), rootA, append(declared[:1], reserved...), c)
+	if _, err := s.Sign("approval", []byte("control")); err != nil {
+		t.Fatalf("control: %v", err)
+	}
+	for _, k := range reserved {
+		if _, ok := s.Published(k.Name); !ok {
+			t.Fatalf("control: the store holds no %s", k.Name)
+		}
+		if sig, err := s.Sign(k.Name, []byte(`{"kid":"forged"}`)); err == nil {
+			t.Errorf("%s signed a request: %x", k.Name, sig.Sig[:8])
+		}
+	}
+	sig, err := s.SignInput("keyryx.delegation-root.es384", func(alg policy.Alg, kid string) ([]byte, error) {
+		return []byte(string(alg) + "." + kid), nil
+	})
+	if err != nil {
+		t.Fatalf("the store's own statement path: %v", err)
+	}
+	if err := Verify(policy.ES384, sig.Public, []byte(string(sig.Alg)+"."+sig.Kid), sig.Sig); err != nil {
+		t.Fatalf("SignInput signed something other than what build returned for its own alg and kid: %v", err)
+	}
+	if rec, ok := s.Active("keyryx.delegation-root.es384"); !ok || rec.Kid != sig.Kid {
+		t.Fatalf("Active names %s, SignInput signed with %s", rec.Kid, sig.Kid)
+	}
+}
