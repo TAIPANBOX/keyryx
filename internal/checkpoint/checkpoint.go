@@ -8,7 +8,7 @@
 // record's prev against the previous record's bytes, then count, head and
 // prefix against the stream. Step 5, consistency with earlier records a
 // verifier kept, is the caller's: it is a question about records the caller
-// held, not about this file.
+// held, not about this file (internal/witness checks it as it re-reads).
 package checkpoint
 
 import (
@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"hash"
 	"regexp"
-	"sort"
 	"time"
 
 	"github.com/TAIPANBOX/agent-stack-go/event"
@@ -339,18 +338,3 @@ func VerifyFile(file, stream []byte, keys KeyFunc) []Result {
 	return out
 }
 
-// Consistent is SPEC 6.5.1 step 5 for a verifier holding earlier records:
-// every kept record whose count is at most the stream's must still find the
-// stream hashing to its prefix through its N. It returns the first that does
-// not, sorted by count.
-func Consistent(kept []Record, view StreamView) (Record, bool) {
-	sorted := append([]Record(nil), kept...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Count < sorted[j].Count })
-	for _, k := range sorted {
-		at, ok := view.At(k.Count)
-		if !ok || at.Prefix != k.Prefix {
-			return k, false
-		}
-	}
-	return Record{}, true
-}
