@@ -8,14 +8,26 @@
 package manifest_test
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/TAIPANBOX/keyryx/internal/config"
+	"github.com/TAIPANBOX/keyryx/internal/keystore"
+	"github.com/TAIPANBOX/keyryx/internal/policy"
 )
 
 type manifest struct {
@@ -23,8 +35,10 @@ type manifest struct {
 	Components []struct {
 		Name    string `json:"name"`
 		Checked struct {
-			Package string `json:"package"`
-			Env     map[string]struct {
+			Package       string `json:"package"`
+			ListenDefault string `json:"listen_default"`
+			HealthPath    string `json:"health_path"`
+			Env           map[string]struct {
 				Required bool `json:"required"`
 			} `json:"env"`
 			RefusedRoles            []string `json:"refused_roles"`
@@ -204,5 +218,254 @@ func TestTheBuiltBinaryRefusesARoleItDoesNotBuild(t *testing.T) {
 		if !errors.As(err, &exit) || exit.ExitCode() != c.Checked.MissingRequiredExitCode {
 			t.Errorf("%s: %v, want exit %d (output %q)", role, err, c.Checked.MissingRequiredExitCode, out)
 		}
+	}
+}
+
+func buildBinary(t *testing.T, r string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "keyryx")
+	build := exec.Command("go", "build", "-o", bin, "./cmd/keyryx")
+	build.Dir = r
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("building: %v\n%s", err, out)
+	}
+	return bin
+}
+
+func freeAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	return l.Addr().String()
+}
+
+func waitFor(addr string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond); err == nil {
+			_ = c.Close()
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+const consumerSecret = "manifest-consumer-key-0123456789"
+
+// custodyEnv is the smallest environment the declaration says custody needs,
+// built from the declaration's own names, plus a socket consumer whose socket
+// directory is short enough for a unix socket path.
+func custodyEnv(t *testing.T) (map[string]string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	data := filepath.Join(dir, "data")
+	if err := os.Mkdir(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dir, "root.key")
+	if err := os.WriteFile(root, []byte(strings.Repeat("5a", 32)+"\n"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte(consumerSecret))
+	sockets, err := os.MkdirTemp("/tmp", "kx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockets) })
+	if err := os.Mkdir(filepath.Join(sockets, "wardryx"), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Chmod(sockets, 0o750)
+	_ = os.Chmod(filepath.Join(sockets, "wardryx"), 0o770)
+	pol := filepath.Join(dir, "policy.json")
+	body := `{"version":1,"keys":[{"name":"wardryx-approval","alg":"ES256"},{"name":"trailryx-root","alg":"ES384"}],
+ "consumers":[{"name":"record-seal","auth":{"key_digest":"sha256:` + hex.EncodeToString(sum[:]) + `"},"grants":{"trailryx-root":["sign"]}},
+  {"name":"wardryx","auth":{"socket":"wardryx"},"grants":{"wardryx-approval":["sign"]}}]}`
+	if err := os.WriteFile(pol, []byte(body), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	addr := freeAddr(t)
+	return map[string]string{
+		"KEYRYX_DATA":          data,
+		"KEYRYX_ROOT_KEY_FILE": root,
+		"KEYRYX_POLICY":        pol,
+		"KEYRYX_ADDR":          addr,
+		"KEYRYX_SOCKET_DIR":    sockets,
+	}, addr
+}
+
+func envList(m map[string]string) []string {
+	out := []string{}
+	for k, v := range m {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
+// The declared listen default is the one the code uses, and every required
+// variable, removed in turn, stops the built binary with the declared code;
+// an optional one does not. With all of them it answers its health path.
+func TestCustodyRefusesWithoutEachRequiredVariableAndAnswersItsHealthPath(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and starts the binary")
+	}
+	m, r := load(t)
+	c := m.Components[0]
+	if c.Checked.ListenDefault != config.DefaultAddr {
+		t.Fatalf("components.json says %s and the code listens on %s by default", c.Checked.ListenDefault, config.DefaultAddr)
+	}
+	bin := buildBinary(t, r)
+	full, addr := custodyEnv(t)
+	required, optional := 0, 0
+	for k, spec := range c.Checked.Env {
+		env := map[string]string{}
+		for kk, vv := range full {
+			env[kk] = vv
+		}
+		delete(env, k)
+		if !spec.Required {
+			continue
+		}
+		required++
+		cmd := exec.Command(bin, "custody")
+		cmd.Env = envList(env)
+		out, err := cmd.CombinedOutput()
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) || exit.ExitCode() != c.Checked.MissingRequiredExitCode || !strings.Contains(string(out), k) {
+			t.Errorf("custody without %s: %v %q", k, err, out)
+		}
+	}
+	for k, spec := range c.Checked.Env {
+		if spec.Required || full[k] == "" || k == "KEYRYX_SOCKET_DIR" || k == "KEYRYX_ADDR" {
+			continue
+		}
+		optional++
+	}
+	if required == 0 {
+		t.Fatal("no required variable is declared, so this test measured nothing")
+	}
+	cmd := exec.Command(bin, "custody")
+	cmd.Env = envList(full)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	if !waitFor(addr, 10*time.Second) {
+		t.Fatalf("custody never listened on %s", addr)
+	}
+	resp, err := http.Get("http://" + addr + c.Checked.HealthPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("the health path answered %d", resp.StatusCode)
+	}
+	_ = optional
+}
+
+// The built binary, as a launcher runs it: a consumer signs over TCP with its
+// key and another over its own unix socket, the key set is published, and a
+// SIGKILL and a restart keep the same keys.
+func TestTheBuiltCustodySignsAndKeepsItsKeysAcrossARestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds and starts the binary")
+	}
+	_, r := load(t)
+	bin := buildBinary(t, r)
+	env, addr := custodyEnv(t)
+	start := func() *exec.Cmd {
+		cmd := exec.Command(bin, "custody")
+		cmd.Env = envList(env)
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		if !waitFor(addr, 10*time.Second) {
+			_ = cmd.Process.Kill()
+			t.Fatalf("custody never listened on %s", addr)
+		}
+		return cmd
+	}
+	body := `{"statement_b64":"` + base64.StdEncoding.EncodeToString([]byte("a seal root")) + `","purpose":"seal"}`
+	signTCP := func() map[string]any {
+		req, _ := http.NewRequest("POST", "http://"+addr+"/v1/keys/trailryx-root/sign", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+consumerSecret)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign over TCP answered %d %v", resp.StatusCode, out)
+		}
+		return out
+	}
+	verify := func(out map[string]any, alg policy.Alg, stmt string) {
+		sig, _ := base64.StdEncoding.DecodeString(fmt.Sprint(out["signature_b64"]))
+		pub, _ := base64.StdEncoding.DecodeString(fmt.Sprint(out["public_key_b64"]))
+		if err := keystore.Verify(alg, pub, []byte(stmt), sig); err != nil {
+			t.Fatalf("the signature does not verify: %v", err)
+		}
+	}
+	first := start()
+	a := signTCP()
+	verify(a, policy.ES384, "a seal root")
+
+	sock := filepath.Join(env["KEYRYX_SOCKET_DIR"], "wardryx", "keyryx.sock")
+	unixClient := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", sock)
+	}}}
+	stmt2 := `{"statement_b64":"` + base64.StdEncoding.EncodeToString([]byte("approve 1")) + `","purpose":"approval"}`
+	resp, err := unixClient.Post("http://keyryx/v1/keys/wardryx-approval/sign", "application/json", strings.NewReader(stmt2))
+	if err != nil {
+		_ = first.Process.Kill()
+		t.Fatalf("the socket consumer could not reach its socket: %v", err)
+	}
+	var viaSocket map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&viaSocket)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_ = first.Process.Kill()
+		t.Fatalf("sign over the socket answered %d %v", resp.StatusCode, viaSocket)
+	}
+	verify(viaSocket, policy.ES256, "approve 1")
+	// The socket names its consumer and no other: wardryx's socket cannot sign
+	// with record-seal's key.
+	resp, err = unixClient.Post("http://keyryx/v1/keys/trailryx-root/sign", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		_ = first.Process.Kill()
+		t.Fatalf("wardryx's socket signed with another consumer's key: %d", resp.StatusCode)
+	}
+	_ = first.Process.Kill()
+	_ = first.Wait()
+
+	second := start()
+	defer func() { _ = second.Process.Kill(); _ = second.Wait() }()
+	b := signTCP()
+	if a["kid"] != b["kid"] {
+		t.Fatalf("a restart changed the key: %v -> %v", a["kid"], b["kid"])
+	}
+	verify(b, policy.ES384, "a seal root")
+	resp, err = http.Get("http://" + addr + "/v1/jwks/trailryx-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var set struct {
+		Keys []map[string]any `json:"keys"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&set)
+	_ = resp.Body.Close()
+	if len(set.Keys) != 1 || set.Keys[0]["kid"] != a["kid"] {
+		t.Fatalf("the published key set %v does not name the key that signed", set.Keys)
 	}
 }
