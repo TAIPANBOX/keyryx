@@ -434,6 +434,9 @@ func (r *Registry) Revoke(kid string) (statement.Statement, error) {
 	return e.st, nil
 }
 
+// Alarms lists the statement states custody could not vouch for. Scaffold.
+func (r *Registry) Alarms() []keystore.Alarm { return nil }
+
 // Inventory lists every statement, revoked ones included, by name then age.
 func (r *Registry) Inventory() []Entry {
 	r.mu.Lock()

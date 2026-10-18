@@ -204,6 +204,21 @@ func Open(dir string, root [32]byte, keys []policy.Key, now func() time.Time) (*
 	return s, nil
 }
 
+// Alarm is a state custody could not vouch for. Scaffold.
+type Alarm struct {
+	Kind, Name, Kid, Reason string
+}
+
+const (
+	stateSalt = "keyryx/state/v1"
+	stateInfo = "keyryx/state/v1"
+)
+
+// Alarms lists the states custody could not vouch for. Scaffold: none.
+func (s *Store) Alarms() []Alarm { return nil }
+
+func keyStateInput(f recordFile) []byte { return nil }
+
 type recordFile struct {
 	V          int    `json:"v"`
 	Name       string `json:"name"`
