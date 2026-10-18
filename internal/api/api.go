@@ -9,8 +9,13 @@
 // cached by verifiers, which keep verifying when this service is down.
 //
 // A refusal tells the caller its status and nothing else; the reason goes to
-// the operator's log (invariant 23). A signature is answered only once its use
-// is on the use log (invariant 18).
+// the operator's log (invariant 23). A signature, and a key statement, is
+// answered only once its use is on the use log (invariant 18).
+//
+// Delegated keys (internal/certify): a consumer granted `delegate` asks for a
+// challenge, answers it with a proof made by its own key, and gets a key
+// statement; the name's key set then publishes the key. The delegation
+// root's own key set, both halves, is `GET /v1/jwks/keyryx.delegation-root`.
 package api
 
 import (
@@ -28,8 +33,10 @@ import (
 	"time"
 
 	"github.com/TAIPANBOX/keyryx/internal/auth"
+	"github.com/TAIPANBOX/keyryx/internal/certify"
 	"github.com/TAIPANBOX/keyryx/internal/keystore"
 	"github.com/TAIPANBOX/keyryx/internal/policy"
+	"github.com/TAIPANBOX/keyryx/internal/statement"
 	"github.com/TAIPANBOX/keyryx/internal/uselog"
 )
 
@@ -45,6 +52,9 @@ var routes = []Route{
 	{"GET", "/v1/keys", "public"},
 	{"GET", "/v1/jwks/{name}", "public"},
 	{"POST", "/v1/keys/{name}/sign", "consumer"},
+	{"POST", "/v1/keys/{name}/challenge", "consumer"},
+	{"POST", "/v1/keys/{name}/delegate", "consumer"},
+	{"GET", "/v1/statements/{kid}", "public"},
 	{"POST", "/v1/keys/{name}/rotate", "admin"},
 	{"POST", "/v1/kids/{kid}/revoke", "admin"},
 }
@@ -56,6 +66,7 @@ func Routes() []Route { return slices.Clone(routes) }
 type Server struct {
 	Policy       *policy.Policy
 	Store        *keystore.Store
+	Certs        *certify.Registry
 	Log          *uselog.Log
 	Auth         *auth.Verifier
 	AdminKeys    [][32]byte
@@ -83,13 +94,16 @@ func WithSocketConsumer(ctx context.Context, name string) context.Context {
 // Handler is the mux, built from the route table.
 func (s *Server) Handler() http.Handler {
 	h := map[string]http.HandlerFunc{
-		"GET /healthz":                s.healthz,
-		"GET /v1/state":               s.state,
-		"GET /v1/keys":                s.inventory,
-		"GET /v1/jwks/{name}":         s.jwks,
-		"POST /v1/keys/{name}/sign":   s.sign,
-		"POST /v1/keys/{name}/rotate": s.rotate,
-		"POST /v1/kids/{kid}/revoke":  s.revoke,
+		"GET /healthz":                   s.healthz,
+		"GET /v1/state":                  s.state,
+		"GET /v1/keys":                   s.inventory,
+		"GET /v1/jwks/{name}":            s.jwks,
+		"POST /v1/keys/{name}/sign":      s.sign,
+		"POST /v1/keys/{name}/challenge": s.challenge,
+		"POST /v1/keys/{name}/delegate":  s.delegate,
+		"GET /v1/statements/{kid}":       s.statement,
+		"POST /v1/keys/{name}/rotate":    s.rotate,
+		"POST /v1/kids/{kid}/revoke":     s.revoke,
 	}
 	mux := http.NewServeMux()
 	for _, r := range routes {
@@ -170,16 +184,36 @@ func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) state(w http.ResponseWriter, _ *http.Request) {
 	type keyState struct {
-		Name        string `json:"name"`
-		Alg         string `json:"alg"`
-		ActiveKid   string `json:"active_kid,omitempty"`
-		ActiveSince int64  `json:"active_since,omitempty"`
-		NextKid     string `json:"next_kid,omitempty"`
-		NextAt      int64  `json:"next_activates_at,omitempty"`
+		Name        string   `json:"name"`
+		Alg         string   `json:"alg"`
+		Mode        string   `json:"mode"`
+		ActiveKid   string   `json:"active_kid,omitempty"`
+		ActiveSince int64    `json:"active_since,omitempty"`
+		NextKid     string   `json:"next_kid,omitempty"`
+		NextAt      int64    `json:"next_activates_at,omitempty"`
+		LiveKids    []string `json:"live_kids,omitempty"`
+		RenewDue    bool     `json:"renew_due,omitempty"`
 	}
 	var keys []keyState
-	for _, k := range s.Policy.Keys {
-		ks := keyState{Name: k.Name, Alg: string(k.Alg)}
+	now := s.now()
+	for _, k := range append(append([]policy.Key(nil), s.Policy.Keys...), statement.RootKeys...) {
+		ks := keyState{Name: k.Name, Alg: string(k.Alg), Mode: string(k.Mode)}
+		if k.Mode == policy.Delegated {
+			// A delegated name is due for renewal when no key of it is
+			// valid past half its life from now.
+			fresh := false
+			for _, e := range s.certs() {
+				if e.Statement.Name != k.Name || e.Revoked != 0 || !e.Statement.ValidAt(now) {
+					continue
+				}
+				ks.LiveKids = append(ks.LiveKids, e.Statement.Kid)
+				half := e.Statement.NotBefore + (e.Statement.NotAfter-e.Statement.NotBefore)/2
+				fresh = fresh || now.Unix() < half
+			}
+			ks.RenewDue = !fresh
+			keys = append(keys, ks)
+			continue
+		}
 		recs, _ := s.Store.Published(k.Name)
 		for _, r := range recs {
 			switch r.State {
@@ -199,15 +233,35 @@ func (s *Server) inventory(w http.ResponseWriter, _ *http.Request) {
 		Name       string `json:"name"`
 		Alg        string `json:"alg"`
 		Kid        string `json:"kid"`
+		Mode       string `json:"mode"`
 		State      string `json:"state"`
 		Created    int64  `json:"created"`
 		ActivateAt int64  `json:"activate_at,omitempty"`
 		Retired    int64  `json:"retired,omitempty"`
 		Revoked    int64  `json:"revoked,omitempty"`
+		Owner      string `json:"owner,omitempty"`
+		NotBefore  int64  `json:"not_before,omitempty"`
+		NotAfter   int64  `json:"not_after,omitempty"`
 	}
 	out := []entry{}
 	for _, r := range s.Store.Inventory() {
-		out = append(out, entry{r.Name, string(r.Alg), r.Kid, string(r.State), r.Created, r.ActivateAt, r.Retired, r.Revoked})
+		out = append(out, entry{Name: r.Name, Alg: string(r.Alg), Kid: r.Kid, Mode: string(policy.Held), State: string(r.State),
+			Created: r.Created, ActivateAt: r.ActivateAt, Retired: r.Retired, Revoked: r.Revoked})
+	}
+	now := s.now()
+	for _, e := range s.certs() {
+		st := e.Statement
+		state := "active"
+		switch {
+		case e.Revoked != 0:
+			state = "revoked"
+		case now.Unix() < st.NotBefore:
+			state = "pending"
+		case now.Unix() >= st.NotAfter:
+			state = "expired"
+		}
+		out = append(out, entry{Name: st.Name, Alg: st.JWK.Alg, Kid: st.Kid, Mode: string(policy.Delegated), State: state,
+			Created: st.IssuedAt, Revoked: e.Revoked, Owner: st.Owner, NotBefore: st.NotBefore, NotAfter: st.NotAfter})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
@@ -216,16 +270,33 @@ func (s *Server) inventory(w http.ResponseWriter, _ *http.Request) {
 // publish-ahead time, so a verifier that refreshes on it holds a next key
 // before that key signs anything (invariant 20).
 func (s *Server) jwks(w http.ResponseWriter, r *http.Request) {
-	recs, ok := s.Store.Published(r.PathValue("name"))
-	if !ok {
+	name := r.PathValue("name")
+	keys := []map[string]any{}
+	found := false
+	if s.Certs != nil {
+		// A delegated name's set: the keys its statements certify.
+		if published, ok := s.Certs.Published(name); ok {
+			keys, found = published, true
+		}
+	}
+	if !found {
+		names := []string{name}
+		if name == statement.RootName {
+			names = []string{statement.RootES384, statement.RootMLDSA}
+		}
+		for _, n := range names {
+			recs, ok := s.Store.Published(n)
+			found = found || ok
+			for _, rec := range recs {
+				if j := keystore.JWK(rec); j != nil {
+					keys = append(keys, j)
+				}
+			}
+		}
+	}
+	if !found {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": http.StatusText(http.StatusNotFound)})
 		return
-	}
-	keys := []map[string]any{}
-	for _, rec := range recs {
-		if j := keystore.JWK(rec); j != nil {
-			keys = append(keys, j)
-		}
 	}
 	age := min(int64(s.PublishAhead/time.Second)/2, 300)
 	w.Header().Set("Cache-Control", "public, max-age="+itoa(max(age, 0)))
@@ -317,6 +388,10 @@ func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
+	if name == statement.RootName {
+		s.rotateRoot(w, fp)
+		return
+	}
 	rec, err := s.Store.Rotate(name, s.PublishAhead)
 	switch {
 	case errors.Is(err, keystore.ErrUnknownKey):
@@ -345,6 +420,9 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
 	kid := r.PathValue("kid")
 	rec, err := s.Store.Revoke(kid)
 	switch {
+	case errors.Is(err, keystore.ErrUnknownKid) && s.Certs != nil:
+		s.revokeDelegated(w, fp, kid)
+		return
 	case errors.Is(err, keystore.ErrUnknownKid):
 		refuse(w, http.StatusNotFound, route, "kid_unknown", "kid", kid)
 		return
@@ -357,4 +435,183 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, publicRecord(rec))
+}
+
+func (s *Server) certs() []certify.Entry {
+	if s.Certs == nil {
+		return nil
+	}
+	return s.Certs.Inventory()
+}
+
+// rotateRoot rotates both halves of the delegation root together, so a
+// statement is always signed by two halves of one generation.
+func (s *Server) rotateRoot(w http.ResponseWriter, fp string) {
+	const route = "rotate"
+	halves := []string{statement.RootES384, statement.RootMLDSA}
+	for _, n := range halves {
+		recs, _ := s.Store.Published(n)
+		for _, rec := range recs {
+			if rec.State == keystore.Next {
+				refuse(w, http.StatusConflict, route, "rotation_in_progress", "key", n)
+				return
+			}
+		}
+	}
+	var out []map[string]any
+	for _, n := range halves {
+		rec, err := s.Store.Rotate(n, s.PublishAhead)
+		if err != nil {
+			refuse(w, http.StatusInternalServerError, route, "store_failed", "key", n, "error", err.Error())
+			return
+		}
+		if err := s.Log.Append(uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + fp, Op: "rotate", Key: n, Kid: rec.Kid}); err != nil {
+			refuse(w, http.StatusServiceUnavailable, route, "use_log_failed", "key", n, "error", err.Error())
+			return
+		}
+		out = append(out, publicRecord(rec))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
+}
+
+func (s *Server) revokeDelegated(w http.ResponseWriter, fp, kid string) {
+	const route = "revoke"
+	st, err := s.Certs.Revoke(kid)
+	switch {
+	case errors.Is(err, certify.ErrUnknownKid):
+		refuse(w, http.StatusNotFound, route, "kid_unknown", "kid", kid)
+		return
+	case err != nil:
+		refuse(w, http.StatusInternalServerError, route, "registry_failed", "kid", kid, "error", err.Error())
+		return
+	}
+	if err := s.Log.Append(uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + fp, Op: "revoke", Key: st.Name, Kid: st.Kid}); err != nil {
+		refuse(w, http.StatusServiceUnavailable, route, "use_log_failed", "kid", kid, "error", err.Error())
+		return
+	}
+	_, revoked, _ := s.Certs.Statement(kid)
+	writeJSON(w, http.StatusOK, map[string]any{"name": st.Name, "kid": st.Kid, "mode": string(policy.Delegated), "revoked": revoked})
+}
+
+// delegator resolves the consumer and checks its delegate grant on name.
+func (s *Server) delegator(w http.ResponseWriter, r *http.Request, route string) (consumer, name string, ok bool) {
+	name = r.PathValue("name")
+	consumer, via, ok := s.consumer(r)
+	if !ok {
+		refuse(w, http.StatusUnauthorized, route, "consumer_unknown", "via", via, "key", name)
+		return "", "", false
+	}
+	if !s.Policy.Allowed(consumer, name, policy.OpDelegate) || s.Certs == nil {
+		refuse(w, http.StatusForbidden, route, "key_not_granted", "consumer", consumer, "key", name)
+		return "", "", false
+	}
+	return consumer, name, true
+}
+
+func (s *Server) challenge(w http.ResponseWriter, r *http.Request) {
+	const route = "challenge"
+	consumer, name, ok := s.delegator(w, r, route)
+	if !ok {
+		return
+	}
+	c, exp, err := s.Certs.Challenge(consumer, name)
+	if err != nil {
+		refuse(w, http.StatusForbidden, route, "key_not_delegated", "consumer", consumer, "key", name)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"challenge": c, "expires_at": exp})
+}
+
+type delegateRequest struct {
+	JWK       json.RawMessage `json:"jwk"`
+	Challenge *string         `json:"challenge"`
+	Proof     *string         `json:"proof_b64"`
+	Lifetime  *int64          `json:"lifetime_s"`
+}
+
+func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
+	const route = "delegate"
+	consumer, name, ok := s.delegator(w, r, route)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, MaxBody)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req delegateRequest
+	if err := dec.Decode(&req); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			refuse(w, http.StatusRequestEntityTooLarge, route, "body_too_large", "consumer", consumer)
+			return
+		}
+		refuse(w, http.StatusBadRequest, route, "body_not_a_request", "consumer", consumer)
+		return
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		refuse(w, http.StatusBadRequest, route, "body_has_trailing_data", "consumer", consumer)
+		return
+	}
+	if req.JWK == nil || req.Challenge == nil || req.Proof == nil || req.Lifetime == nil {
+		refuse(w, http.StatusBadRequest, route, "field_missing", "consumer", consumer)
+		return
+	}
+	proof, err := base64.StdEncoding.Strict().DecodeString(*req.Proof)
+	if err != nil || *req.Lifetime <= 0 || *req.Lifetime > int64(policy.MaxLifetime/time.Second) {
+		refuse(w, http.StatusBadRequest, route, "proof_or_life_malformed", "consumer", consumer)
+		return
+	}
+	var logErr error
+	st, raw, err := s.Certs.Delegate(consumer, name, certify.Request{JWK: req.JWK, Challenge: *req.Challenge, Proof: proof,
+		Lifetime: time.Duration(*req.Lifetime) * time.Second}, func(st statement.Statement, raw []byte) error {
+		sum := sha256.Sum256(raw)
+		logErr = s.Log.Append(uselog.Entry{At: s.now().Unix(), Consumer: consumer, Op: policy.OpDelegate, Key: name, Kid: st.Kid,
+			Digest: "sha256:" + hex.EncodeToString(sum[:])})
+		return logErr
+	})
+	switch {
+	case err == nil:
+	case logErr != nil:
+		refuse(w, http.StatusServiceUnavailable, route, "use_log_failed", "consumer", consumer, "error", logErr.Error())
+		return
+	case errors.Is(err, certify.ErrNoChallenge):
+		refuse(w, http.StatusForbidden, route, "challenge_unknown", "consumer", consumer, "key", name)
+		return
+	case errors.Is(err, certify.ErrBadProof):
+		refuse(w, http.StatusForbidden, route, "proof_invalid", "consumer", consumer, "key", name)
+		return
+	case errors.Is(err, certify.ErrKidRevoked):
+		refuse(w, http.StatusForbidden, route, "kid_revoked", "consumer", consumer, "key", name)
+		return
+	case errors.Is(err, certify.ErrBadKey), errors.Is(err, certify.ErrLifetime):
+		refuse(w, http.StatusBadRequest, route, "key_or_life_refused", "consumer", consumer, "key", name, "error", err.Error())
+		return
+	case errors.Is(err, certify.ErrKidKnown):
+		refuse(w, http.StatusConflict, route, "kid_already_certified", "consumer", consumer, "key", name)
+		return
+	case errors.Is(err, certify.ErrTooManyLive):
+		refuse(w, http.StatusConflict, route, "too_many_live_keys", "consumer", consumer, "key", name)
+		return
+	default:
+		refuse(w, http.StatusInternalServerError, route, "registry_failed", "consumer", consumer, "key", name, "error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"statement": json.RawMessage(raw), "kid": st.Kid, "not_before": st.NotBefore, "not_after": st.NotAfter})
+}
+
+// statement serves the statement that certified a key, and when it was
+// revoked, for a verifier checking what a delegated key signed.
+func (s *Server) statement(w http.ResponseWriter, r *http.Request) {
+	if s.Certs == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": http.StatusText(http.StatusNotFound)})
+		return
+	}
+	raw, revoked, ok := s.Certs.Statement(r.PathValue("kid"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": http.StatusText(http.StatusNotFound)})
+		return
+	}
+	age := min(int64(s.PublishAhead/time.Second)/2, 300)
+	w.Header().Set("Cache-Control", "public, max-age="+itoa(max(age, 0)))
+	writeJSON(w, http.StatusOK, map[string]any{"statement": json.RawMessage(raw), "revoked_at": revoked})
 }

@@ -7,7 +7,7 @@ writers who saw the record when it was written.**
 
 [![CI](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-59-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-83-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/runtime%20dependencies-1-blue.svg)
 
@@ -40,10 +40,10 @@ one process:
 ## Status
 
 **Custody is built; the witness is not.** `keyryx custody` holds keys,
-signs on request for the consumers its policy grants a key, and publishes each
-key's set with an overlap. `keyryx witness` refuses to start (exit 2) rather
-than come up witnessing nothing. Certifying the short-lived keys of high-rate
-signers is the next pull request.
+signs on request for the consumers its policy grants a key, certifies the
+short-lived keys high-rate signers hold themselves, and publishes each key's
+set with an overlap. `keyryx witness` refuses to start (exit 2) rather than
+come up witnessing nothing.
 
 ```bash
 go build -o keyryx ./cmd/keyryx
@@ -63,10 +63,16 @@ KEYRYX_DATA=/var/lib/keyryx KEYRYX_ROOT_KEY_FILE=/run/secrets/keyryx-root \
   `KEYRYX_DATA/keys/<name>/`, its private half wrapped with AES-256-GCM under a
   key derived from the root key and bound to the key's name, id and
   algorithm. A record moved, edited or swapped refuses the start.
-- **A use log**, `KEYRYX_DATA/use.ndjson`: one line per signature, rotation
-  and revocation, each naming the SHA-256 of the line before it. A signature is
-  answered only after its line reached the disk. The log holds the digest of
-  what was signed, never the statement.
+- **A delegation root**, two keys of one generation, ES384 and ML-DSA-65, in
+  the store's reserved `keyryx.` name space. It signs key statements and
+  nothing a request chose.
+- **Key statements**, one file per certified key under
+  `KEYRYX_DATA/statements/<name>/`, each verified under the root at every
+  start. Custody never holds a delegated key's private half.
+- **A use log**, `KEYRYX_DATA/use.ndjson`: one line per signature, key
+  statement, rotation and revocation, each naming the SHA-256 of the line
+  before it. A signature or a statement is answered only after its line reached
+  the disk. The log holds the digest of what was signed, never the statement.
 
 ### The surface
 
@@ -75,15 +81,49 @@ KEYRYX_DATA=/var/lib/keyryx KEYRYX_ROOT_KEY_FILE=/run/secrets/keyryx-root \
 | `GET /healthz` | anyone | liveness |
 | `GET /v1/state` | anyone | the role, the version, each key's active and next key id |
 | `GET /v1/keys` | anyone | the inventory: every key id, its algorithm, its state and its dates, revoked ones included; never a private member |
-| `GET /v1/jwks/{name}` | anyone | the key set a verifier caches: active, next and retired keys, never a revoked one |
+| `GET /v1/jwks/{name}` | anyone | the key set a verifier caches: for a held key its active, next and retired keys; for a delegated name every key certified for it up to its `not_after` plus the overlap; for `keyryx.delegation-root` both halves of the root; never a revoked key |
+| `GET /v1/statements/{kid}` | anyone | `{"statement", "revoked_at"}`: the statement that certified a delegated key, and when it was revoked (0 when it was not) |
 | `POST /v1/keys/{name}/sign` | a consumer granted `sign` on `{name}` | body `{"statement_b64", "purpose"}`, a statement of at most 4 KiB; answer `{"alg", "kid", "signature_b64", "public_key_b64"}` |
-| `POST /v1/keys/{name}/rotate` | an admin key | creates the next key, published now, signing after `KEYRYX_PUBLISH_AHEAD` |
-| `POST /v1/kids/{kid}/revoke` | an admin key | takes a key id out of every key set at once; revoking the active key promotes the next one, or makes a fresh one |
+| `POST /v1/keys/{name}/challenge` | a consumer granted `delegate` on `{name}` | answer `{"challenge", "expires_at"}`: random, for this consumer and name, answerable once within a minute |
+| `POST /v1/keys/{name}/delegate` | a consumer granted `delegate` on `{name}` | body `{"jwk", "challenge", "proof_b64", "lifetime_s"}`; answer `{"statement", "kid", "not_before", "not_after"}` |
+| `POST /v1/keys/{name}/rotate` | an admin key | creates the next key, published now, signing after `KEYRYX_PUBLISH_AHEAD`; for `keyryx.delegation-root`, both halves together |
+| `POST /v1/kids/{kid}/revoke` | an admin key | takes a key id out of every key set at once, held or delegated; revoking the active held key promotes the next one, or makes a fresh one |
 
 ECDSA signatures are fixed-width `R || S` over SHA-256 (ES256) or SHA-384
 (ES384), as in JWS. Key ids are RFC 7638 thumbprints for EC keys and
 `mldsa65:` with the base64url SHA-256 of the public key for ML-DSA. A refusal
 answers its status and nothing else; the reason is in the operator's log.
+
+### Delegated keys
+
+A high-rate signer (the delegation service's token key, a producer's stream
+checkpoint key) generates its own key and keeps it in memory. To have it
+certified:
+
+1. it asks `POST /v1/keys/{name}/challenge`;
+2. it signs, with the key being certified, the bytes
+   `keyryx/delegate/v1 NUL <name> NUL <consumer> NUL <kid> NUL <challenge>`
+   (`kid` the key's RFC 7638 thumbprint; ES256 or ES384, `R || S`);
+3. it sends `POST /v1/keys/{name}/delegate` with its public JWK, the
+   challenge, that proof and the life it wants, from ten minutes to the name's
+   `max_lifetime`.
+
+The answer is a **key statement**: a JWS in the General JSON Serialization,
+one payload and exactly two signatures, the ES384 and the ML-DSA-65 halves of
+the delegation root. The payload's claims are `v` (1), `iss` (`keyryx`),
+`name`, `owner` (the consumer), `kid`, `jwk`, `not_before`, `not_after`,
+`issued_at`, `jti` and `roots` (both halves' key ids), all required and no
+other accepted. The ES384 half is also a compact JWS
+(`protected.payload.signature`) any ES384 verifier checks against
+`/v1/jwks/keyryx.delegation-root`.
+
+The key is then in `/v1/jwks/{name}` until its `not_after` plus the name's
+overlap. A renewal asked while another key of the name is still valid a
+publish-ahead time from now starts that time later, so a verifier that caches
+the key set holds the new key before it signs anything. A key id is certified
+once; a revoked one is never published or certified again, and neither is a
+key certified under a root key since revoked. At most four keys of one name
+are live at once.
 
 ### Who is asking
 
@@ -112,7 +152,7 @@ Each consumer in the policy authenticates exactly one way:
 | `KEYRYX_SOCKET_DIR` | once a consumer uses `socket` | the parent of each socket consumer's directory |
 | `KEYRYX_K8S_ISSUERS` | once a consumer uses `k8s` | one `issuer\|audience\|jwks-file` per line or comma |
 | `KEYRYX_ADMIN_KEYS` | no | comma-separated `sha256:<64 hex>` digests of admin keys; unset, rotate and revoke refuse every call |
-| `KEYRYX_PUBLISH_AHEAD` | no | how long a next key is published before it signs; default `15m`, one minute to one day |
+| `KEYRYX_PUBLISH_AHEAD` | no | how long a next key, or a renewed delegated key, is published before it signs; default `15m`, one minute to one day |
 
 Anything missing or malformed refuses the start with exit 2 and names the
 variable. The policy file:
@@ -122,23 +162,32 @@ variable. The policy file:
   "version": 1,
   "keys": [
     {"name": "wardryx-approval", "alg": "ES256"},
-    {"name": "trailryx-root", "alg": "ML-DSA-65"}
+    {"name": "trailryx-root", "alg": "ML-DSA-65"},
+    {"name": "vouchryx-token", "alg": "ES256", "mode": "delegated",
+     "max_lifetime": "72h", "overlap": "10m"}
   ],
   "consumers": [
     {"name": "wardryx", "auth": {"socket": "wardryx"},
      "grants": {"wardryx-approval": ["sign"]}},
     {"name": "record-seal", "auth": {"key_digest": "sha256:<64 hex>"},
-     "grants": {"trailryx-root": ["sign"]}}
+     "grants": {"trailryx-root": ["sign"]}},
+    {"name": "vouchryx", "auth": {"key_digest": "sha256:<64 hex>"},
+     "grants": {"vouchryx-token": ["delegate"]}}
   ]
 }
 ```
 
-An unknown field, a duplicate, a grant of an undeclared key, an operation
-other than `sign`, or a consumer with no way in or two refuses the start.
+A key is `held` (the default: custody holds it and signs with it) or
+`delegated` (ES256 or ES384; custody certifies a key its consumer holds, for
+at most `max_lifetime`, from ten minutes to a week, and publishes it for
+`overlap` after, default ten minutes). An unknown field, a duplicate, a grant
+of an undeclared key, `sign` on a delegated key or `delegate` on a held one,
+a name starting `keyryx.`, or a consumer with no way in or two refuses the
+start.
 
 ## Testing
 
-59 tests. Tier T3: these are key and signature decisions where a wrong answer
+83 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
 mutation-tested.
 
@@ -160,9 +209,20 @@ staticcheck ./...
 
 Stated here rather than left to be discovered.
 
-- **The witness is not built**, and neither is the certification of
-  short-lived keys. Custody signs with the keys it holds; nothing yet
-  countersigns what the record holds.
+- **The witness is not built.** Nothing yet countersigns what the record holds.
+- **Nothing consumes a key statement yet.** The delegation service, the
+  producers' checkpoint writers and the shared key client that would ask for
+  and renew delegated keys are later pull requests in their own repositories;
+  the round trip with the estate's shared verifier is tested here, not run by
+  a consumer.
+- **A key's state on disk is not authenticated.** Whoever can write the data
+  directory can mark a revoked key or statement as not revoked; the use log's
+  line for the revocation stays, and the witness is what would notice.
+- **Challenges live in memory.** A restart drops the outstanding ones, and the
+  consumer asks again.
+- **A late renewal can sign before verifiers refresh.** When a name's current
+  key ends inside the publish-ahead time, the new key is valid at once, since
+  waiting would leave no valid key at all.
 - **No real Kubernetes cluster has authenticated a consumer.** The projected
   token path is tested against tokens this repository mints with the claims a
   cluster issues; it has not run against a kubelet's token.

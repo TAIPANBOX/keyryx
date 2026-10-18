@@ -41,9 +41,11 @@ docs or commit messages, as tooling for acting against anyone else.
    schedule-rate (an approval being granted, a seal, a manifest asked for, a
    key renewal). The custody routes are one table, `api.Routes`, and the mux is
    built from it: `GET /healthz`, `GET /v1/state`, `GET /v1/keys` and
-   `GET /v1/jwks/{name}` (cached by verifiers), `POST /v1/keys/{name}/sign`
-   (an approval granted, a seal, a manifest), `POST /v1/keys/{name}/rotate` and
-   `POST /v1/kids/{kid}/revoke` (an operator). *(test:
+   `GET /v1/jwks/{name}` and `GET /v1/statements/{kid}` (cached by verifiers),
+   `POST /v1/keys/{name}/sign` (an approval granted, a seal, a manifest),
+   `POST /v1/keys/{name}/challenge` and `POST /v1/keys/{name}/delegate` (a key
+   renewal, at most every few hours per consumer), `POST /v1/keys/{name}/rotate`
+   and `POST /v1/kids/{kid}/revoke` (an operator). *(test:
    `TestTheRouteTableIsTheMux` holds the table and the mux equal; that no
    route is called per request is held by review)*
 
@@ -65,7 +67,7 @@ docs or commit messages, as tooling for acting against anyone else.
    `scripts/private-keys-stay-in-the-store.sh`, every private-key reference in
    `internal/keystore`; tests: `TestNoRouteAnswersWithAPrivateMember` over every
    route of `api.Routes`, `TestTheStoreNeverWritesAPrivateKeyInTheClear`,
-   `TestTheJWKCarriesNoPrivateMember`)*
+   `TestTheJWKCarriesNoPrivateMember`, `TestACertifiedKeyIsNeverHeld`)*
 
 6. **A role that cannot do its job refuses to start.** A key service that came
    up holding nothing would answer and sign nothing, which reads as working; one
@@ -128,17 +130,21 @@ docs or commit messages, as tooling for acting against anyone else.
 
 17. **The policy is read whole or refused.** Strict JSON, version 1, names of
     one grammar, exactly one way in per consumer, no shared socket, digest or
-    service account, grants only of declared keys and only `sign`. Every unknown
-    is a no. *(tests: `TestAMalformedPolicyIsRefused`,
+    service account, grants only of declared keys, `sign` only on held keys and
+    `delegate` only on delegated ones. Every unknown is a no. *(tests:
+    `TestAMalformedPolicyIsRefused`,
     `TestHostilePolicyFilesNeverPanicAndNeverGrantAnUndeclaredKey`,
-    `TestAConsumerMayUseOnlyTheKeysItWasGranted`)*
+    `TestAConsumerMayUseOnlyTheKeysItWasGranted`, `TestDelegatedKeysParse`,
+    `TestAMalformedDelegationPolicyIsRefused`)*
 
-18. **No signature without its line on the use log.** Each line names the
+18. **No signature, and no key statement, without its line on the use log.** Each line names the
     SHA-256 of the line before; a break in the middle refuses the open, a torn
     last line is discarded; the line carries the statement's digest, never the
     statement. *(tests: `TestASignatureIsNotAnsweredWhenItsUseCouldNotBeLogged`,
     `TestATamperedLogRefusesToOpen`, `TestEveryTruncationOpensAPrefixOrRefuses`,
-    `TestAGrantedConsumerGetsASignatureAndTheUseIsLogged`)*
+    `TestAGrantedConsumerGetsASignatureAndTheUseIsLogged`,
+    `TestAStatementIsNotAnsweredWhenItsUseCouldNotBeLogged`,
+    `TestAGrantedConsumerGetsAStatementThroughTheRoutes`)*
 
 19. **A wrapped key opens only under its own root key, name, id and algorithm.**
     HKDF-SHA-384 info and the AES-GCM additional data both carry the three; a
@@ -176,6 +182,52 @@ docs or commit messages, as tooling for acting against anyone else.
     configured. *(tests: `TestARefusalNamesItsReasonInTheLogAndNotInTheAnswer`,
     `TestAdminRoutesNeedAnAdminKey`)*
 
+24. **A key statement is signed by both halves of the delegation root and
+    verifies only with both.** A JWS in the General JSON Serialization with
+    exactly an ES384 and an ML-DSA-65 signature over one payload whose `roots`
+    name both; every claim required, none other accepted; the classical half is
+    a compact JWS the estate's shared verifier accepts. The root's two halves
+    rotate together. *(tests: `TestAStatementVerifiesOnlyWithBothHalvesOfItsRoot`,
+    `TestTheStatementsClassicalHalfVerifiesWithAgentStackGo`,
+    `TestHostileStatementsNeverParseAndNeverPanic`, `TestTheRootKeySetCarriesBothHalves`,
+    `TestTheBuiltCustodyCertifiesADelegatedKeyAndKeepsItAcrossARestart`)*
+
+25. **The delegation root signs nothing a request chose.** It lives in the
+    reserved `keyryx.` name space, which no policy declares or grants, and the
+    store's sign-on-request path refuses that space even for a key it holds;
+    only the statement path signs with it. *(tests:
+    `TestTheStoreNeverSignsARequestWithAReservedKey`,
+    `TestAMalformedDelegationPolicyIsRefused`, `TestDelegationRefusesWhatWasNotGranted`)*
+
+26. **Custody certifies only a key its consumer proves it holds.** A challenge
+    is random, issued to one consumer for one name, answerable once within a
+    minute, and used up by any attempt; the proof is the offered key's
+    signature over a domain separator, the name, the consumer, the key's own
+    kid and the challenge. The key offered is a public EC key and nothing else.
+    *(tests: `TestAKeyIsCertifiedOnlyWithAProofOfPossession`,
+    `TestAProofBindsTheKeyTheNameTheConsumerAndTheChallenge`,
+    `TestHostileKeysAreRefused`, `TestHostileDelegateRequestsAreRefusedAndNeverPanic`)*
+
+27. **A delegated key's life is bounded, and its end is kept.** A life from ten
+    minutes to the name's `max_lifetime`; valid from `not_before` up to
+    `not_after`; published until `not_after` plus the name's overlap and not
+    after; a renewal asked while another key is valid a publish-ahead time from
+    now starts that time later; at most four live keys per name. *(tests:
+    `TestNotAfterIsHonoured`, `TestTheOverlapKeepsAnExpiredKeyPublishedForItsWindow`,
+    `TestARenewalIsPublishedBeforeItSigns`, `TestTheLiveKeysOfANameAreCapped`)*
+
+28. **A key id is certified once, and a revoked one is never published or
+    certified again**, nor is a key whose root key was revoked; a statement on
+    disk is verified whole at every start, and one edited, moved or signed by
+    another root refuses the start. *(tests: `TestAKidIsCertifiedOnceAndARevokedKidNever`,
+    `TestRevokingARootKeyUnpublishesWhatItCertified`, `TestAnAdminRevokesADelegatedKey`,
+    `TestStatementsSurviveARestartAndAnEditedOneRefusesTheStart`)*
+
+29. **Custody never holds a delegated private key.** A delegated key is not in
+    the store, a request carrying a private member is refused, and no file
+    custody writes holds one. *(tests: `TestACertifiedKeyIsNeverHeld`,
+    `TestDelegatedKeysParse`, `TestHostileKeysAreRefused`)*
+
 ## What must never be added without a conversation
 
 - **A route on any request path**: anything a door, a policy decision point or
@@ -191,6 +243,8 @@ docs or commit messages, as tooling for acting against anyone else.
   store (invariant 5).
 - **A sign route for a key the caller was not granted**, or a key set that still
   publishes a revoked key id.
+- **Any path that signs caller-chosen bytes with the delegation root**, or a key
+  statement issued without a proof of possession (invariants 25 and 26).
 - **Custody and witness in one process** (invariant 7).
 
 ## Tier

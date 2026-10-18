@@ -98,6 +98,7 @@ var (
 	ErrRotationInProgress = errors.New("keystore: a rotation of that key is already in progress")
 	ErrStatementTooLarge  = errors.New("keystore: the statement is over the size cap")
 	ErrEmptyStatement     = errors.New("keystore: the statement is empty")
+	ErrReserved           = errors.New("keystore: a key in the service's own name space signs no request")
 )
 
 // MaxStatement bounds what may be signed on request. A larger artefact is
@@ -538,6 +539,12 @@ func (s *Store) Sign(name string, statement []byte) (Signature, error) {
 	if len(statement) > MaxStatement {
 		return Signature{}, ErrStatementTooLarge
 	}
+	if policy.Reserved(name) {
+		// The delegation root signs key statements, which every verifier of a
+		// delegated key trusts; it never signs bytes a request chose
+		// (CLAUDE.md invariant 25).
+		return Signature{}, ErrReserved
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.declared[name]; !ok {
@@ -666,6 +673,52 @@ func (s *Store) Inventory() []Record {
 		return out[i].Kid < out[j].Kid
 	})
 	return out
+}
+
+// Active returns the active record of name.
+func (s *Store) Active(name string) (Record, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = s.tick()
+	if h := s.activeLocked(name); h != nil {
+		return h.rec, true
+	}
+	return Record{}, false
+}
+
+// SignInput signs, with the active key of name, the bytes build returns for
+// that key's algorithm and id. It is the service's own statement path: build
+// runs under the store's lock, so the key id it writes into what it builds is
+// the id of the key that signs it, even across a rotation. Unlike Sign it
+// serves the reserved names, and nothing a consumer sends reaches it.
+func (s *Store) SignInput(name string, build func(alg policy.Alg, kid string) ([]byte, error)) (Signature, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.declared[name]; !ok {
+		return Signature{}, ErrUnknownKey
+	}
+	if err := s.tick(); err != nil {
+		return Signature{}, err
+	}
+	h := s.activeLocked(name)
+	if h == nil {
+		return Signature{}, fmt.Errorf("keystore: %s has no active key", name)
+	}
+	input, err := build(h.rec.Alg, h.rec.Kid)
+	if err != nil {
+		return Signature{}, err
+	}
+	if len(input) == 0 {
+		return Signature{}, ErrEmptyStatement
+	}
+	if len(input) > MaxStatement {
+		return Signature{}, ErrStatementTooLarge
+	}
+	sig, err := h.sign(input)
+	if err != nil {
+		return Signature{}, err
+	}
+	return Signature{Alg: h.rec.Alg, Kid: h.rec.Kid, Sig: sig, Public: append([]byte(nil), h.rec.Public...)}, nil
 }
 
 // Rotate creates the next key of name, published now and signing after ahead.

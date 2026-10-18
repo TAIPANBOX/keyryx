@@ -1,6 +1,7 @@
-// Package policy reads KEYRYX_POLICY: which keys exist, which consumers
-// exist, how each consumer proves who it is, and which keys each may use for
-// what (CLAUDE.md invariant 17).
+// Package policy reads KEYRYX_POLICY: which keys exist, whether custody holds
+// each or certifies one its consumer holds, which consumers exist, how each
+// consumer proves who it is, and which keys each may use for what (CLAUDE.md
+// invariants 17 and 25).
 //
 // The file is read in full or refused. An unknown field, a duplicate, a grant
 // of a key nobody declared or a consumer with two ways in is a policy that
@@ -21,6 +22,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Alg names a signature algorithm a key is created for.
@@ -42,11 +44,55 @@ func (a Alg) valid() bool { return a == ES256 || a == ES384 || a == MLDSA65 }
 // that cannot climb, hide or carry a separator.
 var name = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
+// Mode says whether custody holds a key or certifies one its consumer holds.
+type Mode string
+
+const (
+	Held      Mode = "held"
+	Delegated Mode = "delegated"
+	// OpDelegate is the grant to have a key of a delegated name certified.
+	OpDelegate = "delegate"
+	// DefaultOverlap is how long a delegated key stays published after its
+	// not_after when the policy states no overlap.
+	DefaultOverlap = 10 * time.Minute
+	// ReservedPrefix is the service's own name space (the delegation root).
+	ReservedPrefix = "keyryx."
+)
+
 // Key is one declared key.
 type Key struct {
-	Name string
-	Alg  Alg
+	Name        string
+	Alg         Alg
+	Mode        Mode
+	MaxLifetime time.Duration
+	Overlap     time.Duration
 }
+
+// HeldKeys lists the keys custody holds, the ones that go to the key store.
+// A delegated key is never among them: its private half stays with its
+// consumer.
+func (p *Policy) HeldKeys() []Key {
+	var out []Key
+	for _, k := range p.Keys {
+		if k.Mode == Held {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// Reserved reports whether name is in the service's own name space, where
+// the delegation root lives. No policy declares or grants such a name, and
+// the store signs no request with one.
+func Reserved(name string) bool { return strings.HasPrefix(name, ReservedPrefix) }
+
+// Life bounds of a delegated key, and of its overlap.
+const (
+	MinLifetime = 10 * time.Minute
+	MaxLifetime = 7 * 24 * time.Hour
+	MinOverlap  = time.Minute
+	MaxOverlap  = 24 * time.Hour
+)
 
 // Consumer is one declared consumer and how it authenticates. Exactly one of
 // Socket, HasKeyDigest and K8sIssuer is set.
@@ -67,8 +113,11 @@ type Policy struct {
 }
 
 type fileKey struct {
-	Name string `json:"name"`
-	Alg  string `json:"alg"`
+	Name        string  `json:"name"`
+	Alg         string  `json:"alg"`
+	Mode        *string `json:"mode"`
+	MaxLifetime *string `json:"max_lifetime"`
+	Overlap     *string `json:"overlap"`
 }
 
 type fileK8s struct {
@@ -112,7 +161,7 @@ func Parse(data []byte) (*Policy, error) {
 		return nil, errors.New(`the policy must say "version": 1`)
 	}
 	p := &Policy{}
-	keys := map[string]bool{}
+	keys := map[string]Mode{}
 	if len(f.Keys) == 0 {
 		return nil, errors.New("the policy declares no key, so custody would hold nothing")
 	}
@@ -120,15 +169,22 @@ func Parse(data []byte) (*Policy, error) {
 		if !name.MatchString(k.Name) {
 			return nil, fmt.Errorf("key name %q is not 1 to 64 of a-z 0-9 . _ - starting with a letter or digit", k.Name)
 		}
-		if keys[k.Name] {
+		if Reserved(k.Name) {
+			return nil, fmt.Errorf("key name %s is in the service's own %q name space", k.Name, ReservedPrefix)
+		}
+		if _, dup := keys[k.Name]; dup {
 			return nil, fmt.Errorf("the policy declares key %s twice", k.Name)
 		}
 		alg := Alg(k.Alg)
 		if !alg.valid() {
 			return nil, fmt.Errorf("key %s has algorithm %q; this version creates ES256, ES384 and ML-DSA-65 keys", k.Name, k.Alg)
 		}
-		keys[k.Name] = true
-		p.Keys = append(p.Keys, Key{Name: k.Name, Alg: alg})
+		key, err := keyMode(k, alg)
+		if err != nil {
+			return nil, err
+		}
+		keys[k.Name] = key.Mode
+		p.Keys = append(p.Keys, key)
 	}
 	consumers, sockets, digests, subjects := map[string]bool{}, map[string]bool{}, map[[32]byte]bool{}, map[string]bool{}
 	for _, fc := range f.Consumers {
@@ -189,7 +245,8 @@ func Parse(data []byte) (*Policy, error) {
 			return nil, fmt.Errorf("consumer %s is granted nothing", fc.Name)
 		}
 		for key, ops := range fc.Grants {
-			if !keys[key] {
+			mode, declared := keys[key]
+			if !declared {
 				return nil, fmt.Errorf("consumer %s is granted key %s, which the policy does not declare", fc.Name, key)
 			}
 			if len(ops) == 0 {
@@ -197,8 +254,14 @@ func Parse(data []byte) (*Policy, error) {
 			}
 			set := map[string]bool{}
 			for _, op := range ops {
-				if op != OpSign {
-					return nil, fmt.Errorf("consumer %s is granted %q on %s; this version grants only %q", fc.Name, op, key, OpSign)
+				// Custody signs only with a key it holds, and certifies only a
+				// key it does not: each operation belongs to one mode.
+				switch {
+				case op == OpSign && mode == Held, op == OpDelegate && mode == Delegated:
+				case op == OpSign || op == OpDelegate:
+					return nil, fmt.Errorf("consumer %s is granted %q on %s, a %s key; %q is for held keys and %q for delegated ones", fc.Name, op, key, mode, OpSign, OpDelegate)
+				default:
+					return nil, fmt.Errorf("consumer %s is granted %q on %s; this version grants only %q and %q", fc.Name, op, key, OpSign, OpDelegate)
 				}
 				if set[op] {
 					return nil, fmt.Errorf("consumer %s is granted %q on %s twice", fc.Name, op, key)
@@ -210,6 +273,44 @@ func Parse(data []byte) (*Policy, error) {
 		p.Consumers = append(p.Consumers, c)
 	}
 	return p, nil
+}
+
+// keyMode reads a key's mode and, for a delegated key, its life and overlap.
+func keyMode(k fileKey, alg Alg) (Key, error) {
+	key := Key{Name: k.Name, Alg: alg, Mode: Held}
+	if k.Mode != nil {
+		switch Mode(*k.Mode) {
+		case Held, Delegated:
+			key.Mode = Mode(*k.Mode)
+		default:
+			return Key{}, fmt.Errorf("key %s has mode %q; a key is held or delegated", k.Name, *k.Mode)
+		}
+	}
+	if key.Mode == Held {
+		if k.MaxLifetime != nil || k.Overlap != nil {
+			return Key{}, fmt.Errorf("key %s is held, and a held key has no max_lifetime or overlap: it lives until it is rotated", k.Name)
+		}
+		return key, nil
+	}
+	if alg != ES256 && alg != ES384 {
+		return Key{}, fmt.Errorf("key %s is delegated as %s; a delegated key is ES256 or ES384 in this version", k.Name, alg)
+	}
+	if k.MaxLifetime == nil {
+		return Key{}, fmt.Errorf("key %s is delegated and names no max_lifetime", k.Name)
+	}
+	life, err := time.ParseDuration(*k.MaxLifetime)
+	if err != nil || life < MinLifetime || life > MaxLifetime {
+		return Key{}, fmt.Errorf("key %s has max_lifetime %q; it must be a duration from %s to %s", k.Name, *k.MaxLifetime, MinLifetime, MaxLifetime)
+	}
+	key.MaxLifetime, key.Overlap = life, DefaultOverlap
+	if k.Overlap != nil {
+		o, err := time.ParseDuration(*k.Overlap)
+		if err != nil || o < MinOverlap || o > MaxOverlap {
+			return Key{}, fmt.Errorf("key %s has overlap %q; it must be a duration from %s to %s", k.Name, *k.Overlap, MinOverlap, MaxOverlap)
+		}
+		key.Overlap = o
+	}
+	return key, nil
 }
 
 func parseDigest(s string) ([32]byte, error) {
