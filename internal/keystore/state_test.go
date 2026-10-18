@@ -106,6 +106,9 @@ func TestAnEditedKeyStateIsTreatedAsRevokedAndRaisesAnAlarm(t *testing.T) {
 		"a revoked key edited back to active, the active one to retired": {func(r, _ string) string { return r }, func(_, _ string, r map[string]any) {
 			r["state"], r["revoked"] = "active", 0
 		}},
+		"only the state word changed, revoked to retired": {func(r, _ string) string { return r }, func(_, _ string, r map[string]any) {
+			r["state"] = "retired"
+		}},
 		"the revocation time moved":       {func(r, _ string) string { return r }, func(_, _ string, r map[string]any) { r["revoked"] = t0.Add(time.Hour).Unix() }},
 		"the creation time moved":         {func(_, a string) string { return a }, func(_, _ string, r map[string]any) { r["created"] = t0.Add(-time.Hour).Unix() }},
 		"the activation time moved":       {func(_, a string) string { return a }, func(_, _ string, r map[string]any) { r["activate_at"] = t0.Add(time.Hour).Unix() }},
