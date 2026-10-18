@@ -250,7 +250,7 @@ Feature: Custody holds keys and signs only for the consumer they were granted to
   Scenario: The key set over HTTP follows the key's life
     Given a key rotated, its overlap passed, the old key revoked
     When the key set is fetched each time
-    Then it carries a cache lifetime, two keys in the overlap and after it, never the revoked key, and an undeclared set is not found
+    Then it carries a cache lifetime of at most half the publish-ahead time, two keys in the overlap and after it, never the revoked key, and an undeclared set is not found
 
   # @test:TestAdminRoutesNeedAnAdminKey
   Scenario: Rotation and revocation need an admin key

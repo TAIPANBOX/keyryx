@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -263,8 +264,15 @@ func TestTheKeySetPublishesActiveNextAndRetiredButNeverRevoked(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("jwks: %d", w.Code)
 		}
-		if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "max-age=") {
+		cc := w.Header().Get("Cache-Control")
+		_, age, found := strings.Cut(cc, "max-age=")
+		secs, err := strconv.Atoi(age)
+		if !found || err != nil {
 			t.Errorf("the key set carries no cache lifetime: %q", cc)
+		} else if time.Duration(secs)*time.Second > s.srv.PublishAhead/2 {
+			// A verifier that caches longer than half the overlap can miss a
+			// next key until after it has started signing.
+			t.Errorf("the key set may be cached %ds, over half the %s publish-ahead time", secs, s.srv.PublishAhead)
 		}
 		var keys []map[string]any
 		raw, _ := json.Marshal(body["keys"])
