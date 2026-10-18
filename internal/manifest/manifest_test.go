@@ -39,9 +39,11 @@ type manifest struct {
 			ListenDefault string `json:"listen_default"`
 			HealthPath    string `json:"health_path"`
 			Env           map[string]struct {
-				Required bool `json:"required"`
+				Required bool   `json:"required"`
+				Role     string `json:"role"`
 			} `json:"env"`
-			RefusedRoles            []string `json:"refused_roles"`
+			Roles                   []string `json:"roles"`
+			WitnessListenDefault    string   `json:"witness_listen_default"`
 			MissingRequiredExitCode int      `json:"missing_required_exit_code"`
 		} `json:"checked"`
 		Declared map[string]struct {
@@ -192,10 +194,10 @@ func TestEveryDeclaredEntryCarriesItsReason(t *testing.T) {
 	}
 }
 
-// The built binary refuses each role this version does not build, with the
-// exit code a launcher reads. Started as a process, because a launcher sees a
-// process and nothing else.
-func TestTheBuiltBinaryRefusesARoleItDoesNotBuild(t *testing.T) {
+// The built binary refuses each role it has when the role's configuration is
+// absent, with the exit code a launcher reads. Started as a process, because a
+// launcher sees a process and nothing else.
+func TestTheBuiltBinaryRefusesEachRoleWithoutItsConfiguration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and starts the binary")
 	}
@@ -207,10 +209,10 @@ func TestTheBuiltBinaryRefusesARoleItDoesNotBuild(t *testing.T) {
 		t.Fatalf("building: %v\n%s", err, out)
 	}
 	c := m.Components[0]
-	if len(c.Checked.RefusedRoles) == 0 || c.Checked.MissingRequiredExitCode == 0 {
-		t.Fatal("components.json names no refused role or no exit code, so this test measured nothing")
+	if len(c.Checked.Roles) == 0 || c.Checked.MissingRequiredExitCode == 0 {
+		t.Fatal("components.json names no role or no exit code, so this test measured nothing")
 	}
-	for _, role := range c.Checked.RefusedRoles {
+	for _, role := range c.Checked.Roles {
 		cmd := exec.Command(bin, role)
 		cmd.Env = []string{}
 		out, err := cmd.CombinedOutput()
@@ -327,7 +329,7 @@ func TestCustodyRefusesWithoutEachRequiredVariableAndAnswersItsHealthPath(t *tes
 			env[kk] = vv
 		}
 		delete(env, k)
-		if !spec.Required {
+		if !spec.Required || spec.Role != "custody" {
 			continue
 		}
 		required++

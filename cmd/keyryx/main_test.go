@@ -21,18 +21,21 @@ func TestTheVersionIsPrintedAndExitsZero(t *testing.T) {
 	}
 }
 
-func TestARoleThatIsNotBuiltRefusesToStart(t *testing.T) {
-	for _, role := range []string{"witness"} {
-		code, out, errOut := call(role)
-		if code != exitRefused {
-			t.Errorf("%s: exit %d, want %d", role, code, exitRefused)
-		}
-		if out != "" {
-			t.Errorf("%s: printed to stdout %q; a refusal goes to stderr", role, out)
-		}
-		if !strings.Contains(errOut, "refusing to start") || !strings.Contains(errOut, role) {
-			t.Errorf("%s: the refusal does not say what refused: %q", role, errOut)
-		}
+// The witness is built, and like custody it refuses to start without what it
+// needs, naming the first thing missing (CLAUDE.md invariant 6).
+func TestTheWitnessRefusesToStartWithoutItsConfiguration(t *testing.T) {
+	for _, k := range []string{"KEYRYX_WITNESS_DATA", "KEYRYX_WITNESS_ROOT_KEY_FILE", "KEYRYX_WITNESS_EVENTS"} {
+		t.Setenv(k, "")
+	}
+	code, out, errOut := call("witness")
+	if code != exitRefused {
+		t.Fatalf("the witness with an empty environment exited %d", code)
+	}
+	if out != "" || !strings.Contains(errOut, "refusing to start") || !strings.Contains(errOut, "KEYRYX_WITNESS_") {
+		t.Fatalf("the refusal does not name what is missing: stdout %q stderr %q", out, errOut)
+	}
+	if strings.Contains(errOut, "not built in this version") {
+		t.Fatalf("the witness still says it is not built: %q", errOut)
 	}
 }
 

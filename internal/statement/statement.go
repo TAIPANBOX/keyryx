@@ -131,6 +131,14 @@ func StoreRoots(s *keystore.Store) RootKey {
 	}
 }
 
+// StoreKeys finds the keys of names in a store, in any state, by kid. Scaffold.
+func StoreKeys(s *keystore.Store, names ...string) RootKey {
+	return func(string) (policy.Alg, []byte, bool) { return "", nil, false }
+}
+
+// KeysFromJWKS finds keys by kid in a published key set. Scaffold.
+func KeysFromJWKS(raw []byte) (RootKey, error) { return nil, errors.New("statement: not implemented") }
+
 func strict(raw []byte, into any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
