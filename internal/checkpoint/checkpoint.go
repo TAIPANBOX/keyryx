@@ -337,4 +337,3 @@ func VerifyFile(file, stream []byte, keys KeyFunc) []Result {
 	})
 	return out
 }
-
