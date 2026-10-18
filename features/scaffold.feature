@@ -11,11 +11,11 @@ Feature: The scaffold refuses to pretend
     When it is asked for its version
     Then it prints the version it was built as and exits zero
 
-  # @test:TestARoleThatIsNotBuiltRefusesToStart
-  Scenario: A role this version does not build refuses to start
-    Given the scaffold, in which neither role is built
-    When the custody or the witness role is asked for
-    Then it refuses to start, says which role refused, and exits with the code a launcher reads
+  # @test:TestTheWitnessRefusesToStartWithoutItsConfiguration
+  Scenario: The witness without its configuration refuses to start
+    Given an empty environment
+    When the witness role is asked for
+    Then it refuses to start, names what is missing, and exits with the code a launcher reads
 
   # @test:TestNoCommandOrAnUnknownOneRefusesWithTheUsage
   Scenario: No command or an unknown one is refused with the usage
@@ -23,10 +23,10 @@ Feature: The scaffold refuses to pretend
     When it is started with no command or with one it does not know
     Then it prints the usage and refuses, and asking for help prints the usage and exits zero
 
-  # @test:TestTheBuiltBinaryRefusesARoleItDoesNotBuild
+  # @test:TestTheBuiltBinaryRefusesEachRoleWithoutItsConfiguration
   Scenario: The refusal holds for the built binary a launcher runs
     Given the binary built from this repository, started as a process with an empty environment
-    When it is asked for each role the declaration says it refuses
+    When it is asked for each role the declaration names
     Then each exits with the declared code
 
   # @test:TestEveryBinaryThisRepositoryBuildsIsDeclaredAndTheReverse

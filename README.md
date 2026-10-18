@@ -7,9 +7,9 @@ writers who saw the record when it was written.**
 
 [![CI](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-91-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-153-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
-![Status](https://img.shields.io/badge/runtime%20dependencies-1-blue.svg)
+![Status](https://img.shields.io/badge/runtime%20dependencies-2-blue.svg)
 
 </div>
 
@@ -21,11 +21,11 @@ one process:
   short-lived keys of high-rate signers (the delegation service's token key, each
   producer's stream checkpoint key); publishes key sets with an overlap, so a
   rotation is never an outage.
-- **witness** reads the record read-only, checks that what it saw before is
-  still a prefix of what it sees now, countersigns what it sees, and keeps its
-  own append-only Merkle log, its tree heads signed with ECDSA P-384 and ML-DSA-65 side
-  by side, so what it signed today still verifies after classical signatures are
-  retired.
+- **witness** reads the record read-only, checks that every byte it saw
+  before is still there, attests to what it sees, and keeps its own
+  append-only Merkle log, its tree heads signed with ECDSA P-384 and ML-DSA-65
+  side by side, so what it signed today still verifies after classical
+  signatures are retired.
 
 ## What it is not
 
@@ -39,17 +39,21 @@ one process:
 
 ## Status
 
-**Custody is built; the witness is not.** `keyryx custody` holds keys,
-signs on request for the consumers its policy grants a key, certifies the
-short-lived keys high-rate signers hold themselves, and publishes each key's
-set with an overlap. `keyryx witness` refuses to start (exit 2) rather than
-come up witnessing nothing.
+**Both roles are built.** `keyryx custody` holds keys, signs on request for
+the consumers its policy grants a key, certifies the short-lived keys
+high-rate signers hold themselves, and publishes each key's set with an
+overlap. `keyryx witness` reads the bus, its checkpoints and trailryx's
+sealed manifests, says when anything it saw is no longer there, attests to
+each new trailryx store root, and keeps its own signed log. `keyryx verify`
+checks a witness log, or streams and their checkpoints, offline.
 
 ```bash
 go build -o keyryx ./cmd/keyryx
 ./keyryx version
 KEYRYX_DATA=/var/lib/keyryx KEYRYX_ROOT_KEY_FILE=/run/secrets/keyryx-root \
   KEYRYX_POLICY=/etc/keyryx/policy.json ./keyryx custody
+KEYRYX_WITNESS_DATA=/var/lib/keyryx-witness KEYRYX_WITNESS_ROOT_KEY_FILE=/run/secrets/keyryx-witness-root \
+  KEYRYX_WITNESS_EVENTS=/var/lib/agent-stack/events ./keyryx witness
 ```
 
 ### What custody holds
@@ -191,9 +195,96 @@ of an undeclared key, `sign` on a delegated key or `delegate` on a held one,
 a name starting `keyryx.`, or a consumer with no way in or two refuses the
 start.
 
+## The witness
+
+A separate process, with its own data directory, its own root key and its
+own key: the witness refuses custody's directory, key file or key as its own.
+Every `KEYRYX_WITNESS_INTERVAL` it reads, read-only:
+
+- **every stream** (`*.ndjson`) in `KEYRYX_WITNESS_EVENTS`. It keeps the bytes
+  it has read and their SHA-256, the same `prefix` as agent-passport SPEC
+  6.5.1, because the SPEC 6.5 chain hash leaves `prev_hash` out and a line
+  rewritten with its successor re-linked passes the chain. Each interval it
+  hashes the stream again from byte zero, so any byte it saw that changed is
+  `witness_stream_rewritten`; a stream that holds fewer bytes than it saw is
+  `witness_stream_truncated`; a new chain mid-stream is
+  `witness_chain_restarted`, medium when a `resume` checkpoint explains it.
+- **every checkpoint file** in `KEYRYX_WITNESS_CHECKPOINTS`, by SPEC 6.5.1's
+  steps: each record its own RFC 8785 form, signed by a key whose statement
+  custody serves (`KEYRYX_WITNESS_CUSTODY_URL`), valid at the record's time,
+  not revoked when the witness read it, and certified for the key name that
+  stream is bound to (`KEYRYX_WITNESS_STREAM_KEYS`), and every checkpoint it
+  kept still holding. A record that does not is `witness_checkpoint_invalid`;
+  an unsigned one is `witness_checkpoint_unsigned`; while custody does not
+  answer, a record waits. Statements verify only under the delegation root
+  the witness pinned in its own log when it first read it: a different set
+  served later is a high `witness_checkpoint_invalid` about the
+  `delegation-root`, and is not used until an operator pins it.
+- **every trailryx data directory** in `KEYRYX_WITNESS_RECORDS`. It computes
+  the store root as trailryx-verify does and attests to each new one in
+  trailryx-sign's `witness_statement` bytes with its ES384 half, written to
+  `KEYRYX_WITNESS_DATA/attestations/<tenant>/<root>.json`. A sealed manifest
+  rewritten or gone is `witness_root_equivocated`; a record that grew past a
+  seal's worth with no new root for two seal intervals is `witness_root_missing`.
+
+Every finding is an agent-event in `KEYRYX_WITNESS_ALERTS` (by default
+`keyryx.ndjson` in the events directory), source `keyryx`, subject
+`agent://keyryx.internal/witness`, with counts and clipped hashes and never
+record content. Every observation is an entry in its own log
+(`log.ndjson`), an RFC 9162 Merkle tree over SHA-384, and each interval ends
+with a tree head signed by ES384 and ML-DSA-65 (`heads.ndjson`). When an
+operator names an RFC 3161 time-stamping authority, the latest head is
+time-stamped every `KEYRYX_WITNESS_TSA_EVERY` and the token goes into the log.
+
+| witness route | what |
+|---|---|
+| `GET /healthz` | liveness |
+| `GET /v1/witness/head` | the latest signed tree head |
+| `GET /v1/witness/keys` | the witness key's two halves, the key set its heads and attestations verify under |
+| `GET /v1/witness/inclusion?index=I&size=N` | the leaf at I and its RFC 9162 inclusion proof in the tree of size N |
+| `GET /v1/witness/consistency?first=M&second=N` | the RFC 9162 proof that the tree of size N extends the one of size M |
+| `GET /v1/witness/entries?start=S&end=E` | the entries S to E, at most 1000 |
+
+| variable | required | what |
+|---|---|---|
+| `KEYRYX_WITNESS_DATA` | yes | the witness's own data directory, mode 0700, never custody's |
+| `KEYRYX_WITNESS_ROOT_KEY_FILE` | yes | its own root key file, never custody's or a copy of custody's key |
+| `KEYRYX_WITNESS_EVENTS` | yes | the bus directory it reads |
+| `KEYRYX_WITNESS_CHECKPOINTS` | no | the checkpoint directory it reads |
+| `KEYRYX_WITNESS_CUSTODY_URL` | once checkpoints are set | where custody serves key statements |
+| `KEYRYX_WITNESS_STREAM_KEYS` | once checkpoints are set | `stream.ndjson\|key-name` per stream, comma or line separated: the delegated key name whose certified keys sign that stream's checkpoints |
+| `KEYRYX_WITNESS_DELEGATION_ROOT_PIN` | no | the delegation root's kids, at least one ES384 and one ML-DSA-65, comma separated; replaces the pin in the log. Unset, the first set custody serves is pinned |
+| `KEYRYX_WITNESS_ALERTS` | no | where it writes its findings; default `<events>/keyryx.ndjson` |
+| `KEYRYX_WITNESS_RECORDS` | no | `tenant\|directory` per trailryx data directory, comma or line separated |
+| `KEYRYX_WITNESS_ADDR` | no | default `127.0.0.1:4341` |
+| `KEYRYX_WITNESS_INTERVAL` | no | default `1m`, one second to one hour |
+| `KEYRYX_WITNESS_FULL_BYTES` | no | a stream over this many bytes is hashed from zero only every `KEYRYX_WITNESS_FULL_INTERVAL`; default 256 MiB |
+| `KEYRYX_WITNESS_FULL_INTERVAL` | no | default `1h` |
+| `KEYRYX_WITNESS_SEAL_EVERY` and `KEYRYX_WITNESS_SEAL_LINES` | no | what a seal's worth is, for `witness_root_missing`; default `15m` and 4096 lines |
+| `KEYRYX_WITNESS_NAME` | no | the name in its attestations; default `keyryx-witness` |
+| `KEYRYX_WITNESS_TSA_URL` | no | an https RFC 3161 authority; unset, none is called |
+| `KEYRYX_WITNESS_TSA_CA` | once a TSA is set | the PEM root its tokens must chain to |
+| `KEYRYX_WITNESS_TSA_EVERY` | no | default `1h`, ten minutes to a day |
+
+### Checking offline
+
+```bash
+# the witness's log, against the key set it published
+keyryx verify log --dir /var/lib/keyryx-witness --keys witness-keys.json
+# streams and their checkpoints, against saved statements and the delegation root
+keyryx verify streams --events events/ --checkpoints checkpoints/ \
+  --statements statements/ --stream-keys 'wardryx.ndjson|wardryx-stream' \
+  --roots delegation-root.json
+```
+
+Each check prints `[ok]`, `[weak]` or `[broken]`, and the last line says
+`VERIFIED` (exit 0) or `NOT VERIFIED` (exit 1). An empty directory is
+"measured nothing", never OK. `statements/` holds one `<kid>.json` per key,
+each what `GET /v1/statements/{kid}` answered.
+
 ## Testing
 
-91 tests. Tier T3: these are key and signature decisions where a wrong answer
+153 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
 mutation-tested.
 
@@ -215,7 +306,33 @@ staticcheck ./...
 
 Stated here rather than left to be discovered.
 
-- **The witness is not built.** Nothing yet countersigns what the record holds.
+- **trailryx does not attach the attestations yet.** `trailryx-node` takes no
+  witness input, so the attestations the witness writes are files beside its
+  log until trailryx reads them into its packs; `trailryx-verify` would check
+  them as it checks any witness, which this repository has not run.
+- **The store root is trailryx's construction rebuilt by hand.** It is
+  checked against trailryx's source at 92dd4b6 by a reference written
+  separately in the tests, not against a store trailryx itself sealed: no
+  trailryx build has run here.
+- **A rewrite that also shortens a stream is reported as a truncation.** The
+  witness knows the bytes are not the ones it saw; with fewer bytes than it
+  read, it names the shrinking.
+- **The cost of re-reading is not measured.** Each interval hashes every
+  stream under `KEYRYX_WITNESS_FULL_BYTES` from byte zero; how long that takes
+  on a real bus has not been measured.
+- **No time-stamping authority has been asked.** The RFC 3161 client is
+  tested against an authority the tests build, with ECDSA and RSA keys; no
+  public authority's token has been verified by it.
+- **The first root is taken on first use.** With no
+  `KEYRYX_WITNESS_DELEGATION_ROOT_PIN`, the witness pins whatever root set
+  custody serves at its first read; a set swapped before that read is pinned.
+  An operator closes that window by setting `KEYRYX_WITNESS_DELEGATION_ROOT_PIN`
+  from the kids of the delegation root's published key set before the witness
+  first starts. A real
+  rotation of the delegation root reads as a changed root until an operator
+  pins the new set, and no rotation has been run against a witness here.
+- **The witness reads the bus and the record, not custody's use log**, and
+  custody writes no `key_rotated` or `key_revoked` event yet.
 - **Nothing consumes a key statement yet.** The delegation service, the
   producers' checkpoint writers and the shared key client that would ask for
   and renew delegated keys are later pull requests in their own repositories;
@@ -241,15 +358,16 @@ Stated here rather than left to be discovered.
   answer is 503 and the key's state has changed; only a signature is withheld
   until its line is written.
 - **The use log is protected against edits in its middle, not against a rewrite
-  from its first line.** That is the witness's job, which is not built.
+  from its first line.** The witness of this version does not read it.
 - **No cloud key management.** The root key is a file. A KMS adapter would be
   metered, and it is the operator's decision, not a default.
 - **No image has been published.** The release workflow builds and signs one on
   the first `v*` tag; until then there is nothing to pull.
 - **Independence from a host administrator** will not come from this service
   alone: on one machine the witness is a separate user and volume, not a
-  separate trust domain. An off-host anchor (a public time-stamping authority, or
-  a second witness on another machine) is what closes that, and it is opt-in.
+  separate trust domain. An off-host anchor (a public time-stamping authority,
+  built here and off by default, or a second witness on another machine, not
+  built) is what closes that, and it is the operator's to switch on.
 - **Post-quantum signatures** are produced with Go 1.27's `crypto/mldsa`; no
   verifier outside this repository checks ML-DSA yet, and the key set's AKP
   form follows a JOSE draft, not a published RFC.

@@ -18,16 +18,36 @@
         "listen_default": "127.0.0.1:4340",
         "health_path": "/healthz",
         "env": {
-          "KEYRYX_DATA": { "required": true },
-          "KEYRYX_ROOT_KEY_FILE": { "required": true },
-          "KEYRYX_POLICY": { "required": true },
-          "KEYRYX_ADDR": { "required": false },
-          "KEYRYX_SOCKET_DIR": { "required": false },
-          "KEYRYX_ADMIN_KEYS": { "required": false },
-          "KEYRYX_K8S_ISSUERS": { "required": false },
-          "KEYRYX_PUBLISH_AHEAD": { "required": false }
+          "KEYRYX_DATA": { "required": true, "role": "custody" },
+          "KEYRYX_ROOT_KEY_FILE": { "required": true, "role": "custody" },
+          "KEYRYX_POLICY": { "required": true, "role": "custody" },
+          "KEYRYX_ADDR": { "required": false, "role": "custody" },
+          "KEYRYX_SOCKET_DIR": { "required": false, "role": "custody" },
+          "KEYRYX_ADMIN_KEYS": { "required": false, "role": "custody" },
+          "KEYRYX_K8S_ISSUERS": { "required": false, "role": "custody" },
+          "KEYRYX_PUBLISH_AHEAD": { "required": false, "role": "custody" },
+          "KEYRYX_WITNESS_DATA": { "required": true, "role": "witness" },
+          "KEYRYX_WITNESS_ROOT_KEY_FILE": { "required": true, "role": "witness" },
+          "KEYRYX_WITNESS_EVENTS": { "required": true, "role": "witness" },
+          "KEYRYX_WITNESS_CHECKPOINTS": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_CUSTODY_URL": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_STREAM_KEYS": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_DELEGATION_ROOT_PIN": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_ALERTS": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_RECORDS": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_ADDR": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_INTERVAL": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_FULL_BYTES": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_FULL_INTERVAL": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_SEAL_EVERY": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_SEAL_LINES": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_NAME": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_TSA_URL": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_TSA_CA": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_TSA_EVERY": { "required": false, "role": "witness" }
         },
-        "refused_roles": ["witness"],
+        "roles": ["custody", "witness"],
+        "witness_listen_default": "127.0.0.1:4341",
         "missing_required_exit_code": 2
       },
       "declared": {
@@ -35,9 +55,17 @@
           "value": "key custody and an independent witness for the agent-governance record, off every request path",
           "why": "a sentence about purpose is not a property of the source"
         },
-        "witness_not_built": {
-          "value": "the witness role is not built in this version and refuses to start with exit 2",
-          "why": "a witness that came up and witnessed nothing would read as a record nobody rewrote; it arrives in its own pull request"
+        "roles_separate": {
+          "value": "custody and witness are two processes of one binary, never one: the witness refuses KEYRYX_DATA or KEYRYX_ROOT_KEY_FILE as its own, or a copy of custody's root key",
+          "why": "the uid and the volume each runs under are the launcher's to set; this repository can refuse sharing a path or a key, not choose a uid"
+        },
+        "witness_conditional": {
+          "value": "KEYRYX_WITNESS_CUSTODY_URL and KEYRYX_WITNESS_STREAM_KEYS are required once KEYRYX_WITNESS_CHECKPOINTS is set, and KEYRYX_WITNESS_TSA_CA once KEYRYX_WITNESS_TSA_URL is",
+          "why": "the manifest's required/optional split cannot express a variable required only by another one; internal/wconfig holds the conditional rule and its tests"
+        },
+        "tsa_opt_in": {
+          "value": "unset: no time-stamping authority is called; the witness log is anchored on this host only",
+          "why": "an RFC 3161 authority is an outbound call to a third party, opt-in by the operator; without one the witness defends against the planes, not against root on the host"
         },
         "socket_dir_conditional": {
           "value": "KEYRYX_SOCKET_DIR is required once a consumer in KEYRYX_POLICY authenticates by socket, and KEYRYX_K8S_ISSUERS once one authenticates by a projected service-account token",
