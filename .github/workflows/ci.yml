@@ -50,6 +50,8 @@ jobs:
         run: ./scripts/no-owner-quotes.sh
       - name: no long dash
         run: ./scripts/no-long-dashes.sh --prove
+      - name: private keys stay in the store
+        run: ./scripts/private-keys-stay-in-the-store.sh
       - name: the gates have teeth
         run: ./scripts/gates-have-teeth.sh
 

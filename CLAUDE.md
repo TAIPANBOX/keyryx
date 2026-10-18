@@ -39,8 +39,13 @@ docs or commit messages, as tooling for acting against anyone else.
    call waits on this service. Verifiers cache what it publishes and keep
    verifying when it is down; the only synchronous calls are human-rate or
    schedule-rate (an approval being granted, a seal, a manifest asked for, a
-   key renewal). *(not enforced by a gate yet: held by review; the custody
-   pull request names every route and what calls it)*
+   key renewal). The custody routes are one table, `api.Routes`, and the mux is
+   built from it: `GET /healthz`, `GET /v1/state`, `GET /v1/keys` and
+   `GET /v1/jwks/{name}` (cached by verifiers), `POST /v1/keys/{name}/sign`
+   (an approval granted, a seal, a manifest), `POST /v1/keys/{name}/rotate` and
+   `POST /v1/kids/{kid}/revoke` (an operator). *(test:
+   `TestTheRouteTableIsTheMux` holds the table and the mux equal; that no
+   route is called per request is held by review)*
 
 2. **No decisions.** It signs what a consumer that was granted a key asks it
    to sign. It evaluates no policy, refuses nothing for money and judges no
@@ -56,14 +61,21 @@ docs or commit messages, as tooling for acting against anyone else.
 
 5. **No private key leaves.** No route, log line, event or file outside the
    wrapped key store carries a private member, and the store holds private keys
-   only wrapped under the root key. *(not built yet: the custody pull request
-   adds the store and a gate over its routes)*
+   only wrapped under the root key. *(gate:
+   `scripts/private-keys-stay-in-the-store.sh`, every private-key reference in
+   `internal/keystore`; tests: `TestNoRouteAnswersWithAPrivateMember` over every
+   route of `api.Routes`, `TestTheStoreNeverWritesAPrivateKeyInTheClear`,
+   `TestTheJWKCarriesNoPrivateMember`)*
 
 6. **A role that cannot do its job refuses to start.** A key service that came
    up holding nothing would answer and sign nothing, which reads as working; one
    that came up with a default key would sign anything. Exit code 2, and the
    message names what is missing. *(test: `TestARoleThatIsNotBuiltRefusesToStart`,
-   `TestTheBuiltBinaryRefusesARoleItDoesNotBuild`)*
+   `TestTheBuiltBinaryRefusesARoleItDoesNotBuild`,
+   `TestCustodyRefusesToStartWithoutItsConfiguration`,
+   `TestCustodyRefusesWithoutEachRequiredVariableAndAnswersItsHealthPath`,
+   `TestEachRequiredVariableIsNamedWhenMissing`, `TestMalformedValuesRefuseTheStart`,
+   `TestAConsumerWhoseWayInIsNotConfiguredRefusesTheStart`)*
 
 7. **Custody and witness never share a process, a key, a uid or a data
    directory.** A compromise of custody gives the power to sign; the witness,
@@ -109,6 +121,61 @@ docs or commit messages, as tooling for acting against anyone else.
     `scripts/gates-have-teeth.sh`, which also refuses a gate in `scripts/`
     that has no case)*
 
+16. **The root key is a file only its owner can read.** Exactly 64 hex
+    characters, one optional newline, never all zero; group or other
+    permission refuses the start. *(tests: `TestARootKeyReadableByGroupOrOtherIsRefused`,
+    `TestAMissingOrMalformedRootKeyIsRefused`, `TestHostileRootKeyFilesNeverLoadAndNeverPanic`)*
+
+17. **The policy is read whole or refused.** Strict JSON, version 1, names of
+    one grammar, exactly one way in per consumer, no shared socket, digest or
+    service account, grants only of declared keys and only `sign`. Every unknown
+    is a no. *(tests: `TestAMalformedPolicyIsRefused`,
+    `TestHostilePolicyFilesNeverPanicAndNeverGrantAnUndeclaredKey`,
+    `TestAConsumerMayUseOnlyTheKeysItWasGranted`)*
+
+18. **No signature without its line on the use log.** Each line names the
+    SHA-256 of the line before; a break in the middle refuses the open, a torn
+    last line is discarded; the line carries the statement's digest, never the
+    statement. *(tests: `TestASignatureIsNotAnsweredWhenItsUseCouldNotBeLogged`,
+    `TestATamperedLogRefusesToOpen`, `TestEveryTruncationOpensAPrefixOrRefuses`,
+    `TestAGrantedConsumerGetsASignatureAndTheUseIsLogged`)*
+
+19. **A wrapped key opens only under its own root key, name, id and algorithm.**
+    HKDF-SHA-384 info and the AES-GCM additional data both carry the three; a
+    record whose id is not its public key's thumbprint, or whose private half is
+    not its public key's, refuses the start. *(tests:
+    `TestAWrappedKeyOpensOnlyUnderItsOwnRootAndName`, `TestATamperedRecordRefusesToOpen`,
+    `TestARecordWhoseKidIsNotItsThumbprintRefusesTheStart`,
+    `TestHostileRecordFilesNeverPanicAndNeverSignWithAnUnpublishedKey`)*
+
+20. **A rotation publishes the next key before it signs.** The next key is in
+    the key set for `KEYRYX_PUBLISH_AHEAD` before it becomes active, the key
+    set's cache lifetime is at most half of that, and the retired key stays
+    published so what it signed keeps verifying. *(tests:
+    `TestRotationPublishesTheNextKeyBeforeItSigns`,
+    `TestTheKeySetPublishesActiveNextAndRetiredButNeverRevoked`,
+    `TestASecondRotationWhileOneIsPendingIsRefused`)*
+
+21. **A revoked key is never published and never signs**, not after a restart
+    either; revoking the active key promotes the next one or makes a fresh one.
+    *(tests: `TestARevokedKeyIsNeverPublishedAndNeverSigns`,
+    `TestTheKeySetPublishesActiveNextAndRetiredButNeverRevoked`)*
+
+22. **A consumer signs only with a key it was granted, and is who its one way in
+    says.** A socket names its consumer and nothing sent over it changes that; a
+    key is compared by digest in constant time; a projected token is verified
+    with the algorithm from the key, for one audience, at most an hour long, and
+    bound to one service account. Nothing resolves to a default consumer.
+    *(tests: `TestAConsumerCannotSignWithAKeyItWasNotGranted`,
+    `TestAnUnauthenticatedCallerGetsNoSignature`, `TestAKeyBearerResolvesToItsConsumer`,
+    `TestAHostileOrWrongProjectedTokenResolvesNobody`,
+    `TestTheBuiltCustodySignsAndKeepsItsKeysAcrossARestart`)*
+
+23. **A refusal answers its status and nothing else.** The reason goes to the
+    operator's log; admin routes refuse every call when no admin key is
+    configured. *(tests: `TestARefusalNamesItsReasonInTheLogAndNotInTheAnswer`,
+    `TestAdminRoutesNeedAnAdminKey`)*
+
 ## What must never be added without a conversation
 
 - **A route on any request path**: anything a door, a policy decision point or
@@ -148,6 +215,7 @@ go build ./...
 ./scripts/dependencies-are-argued.sh
 ./scripts/no-owner-quotes.sh
 ./scripts/no-long-dashes.sh
+./scripts/private-keys-stay-in-the-store.sh
 ./scripts/gates-have-teeth.sh   # needs a clean tree; run it after committing
 ```
 

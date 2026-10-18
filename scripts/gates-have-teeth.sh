@@ -142,6 +142,17 @@ fault "long dashes: a short hyphen is not one" \
   README.md '## Licence' '## Licence - and a hyphen' \
   pass ./scripts/no-long-dashes.sh
 
+# --- private-keys-stay-in-the-store --------------------------------------
+fault "private keys: a handler grows a reference to a private key" \
+  internal/api/api.go 'type ctxKey struct{}' $'type ctxKey struct{}\n\nvar _ *ecdsa.PrivateKey' \
+  fail ./scripts/private-keys-stay-in-the-store.sh
+fault_all "private keys: the store handles none, so nothing is measured" \
+  internal/keystore/keystore.go 'Key' 'Kee' \
+  fail ./scripts/private-keys-stay-in-the-store.sh
+fault "private keys: a comment outside the store names one" \
+  internal/api/api.go 'type ctxKey struct{}' 'type ctxKey struct{} // never an ecdsa.PrivateKey' \
+  pass ./scripts/private-keys-stay-in-the-store.sh
+
 # --- every gate in scripts/ has a case here --------------------------------
 uncovered=""
 for gate in scripts/*.sh; do

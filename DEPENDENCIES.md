@@ -13,3 +13,4 @@ cloud KMS client is one (CLAUDE.md, "What must never be added").
 
 | module | why it is here |
 |---|---|
+| `github.com/TAIPANBOX/agent-stack-go` | The estate's shared token library, public and under the same organisation. Custody uses only its `delegation` package: `VerifyToken` checks a Kubernetes projected service-account token with the algorithm taken from the key's own type, never from the token's header (so `none`, HMAC and a downgrade are refused in one audited place), `Thumbprint` computes RFC 7638 key ids, and `FromPublic` renders an EC public key as a JWK with public members only. The delegation service and the gateways verify with the same code, so a fix to it lands once for every verifier. Writing a second JWS verifier here would be a second place for the alg-confusion defence to be wrong. Module graph pruning keeps its own requirements (`gowebpki/jcs`, `santhosh-tekuri/jsonschema`) out of this build: `go.sum` lists the one module. |

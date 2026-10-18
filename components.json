@@ -15,8 +15,19 @@
       "class": "service",
       "checked": {
         "package": "github.com/TAIPANBOX/keyryx/cmd/keyryx",
-        "env": {},
-        "refused_roles": ["custody", "witness"],
+        "listen_default": "127.0.0.1:4340",
+        "health_path": "/healthz",
+        "env": {
+          "KEYRYX_DATA": { "required": true },
+          "KEYRYX_ROOT_KEY_FILE": { "required": true },
+          "KEYRYX_POLICY": { "required": true },
+          "KEYRYX_ADDR": { "required": false },
+          "KEYRYX_SOCKET_DIR": { "required": false },
+          "KEYRYX_ADMIN_KEYS": { "required": false },
+          "KEYRYX_K8S_ISSUERS": { "required": false },
+          "KEYRYX_PUBLISH_AHEAD": { "required": false }
+        },
+        "refused_roles": ["witness"],
         "missing_required_exit_code": 2
       },
       "declared": {
@@ -24,9 +35,17 @@
           "value": "key custody and an independent witness for the agent-governance record, off every request path",
           "why": "a sentence about purpose is not a property of the source"
         },
-        "scaffold": {
-          "value": "neither role is built in this version; both refuse to start with exit 2",
-          "why": "a key service that came up holding nothing would answer and sign nothing, which reads as working; the roles arrive in their own pull requests and this entry goes with the first of them"
+        "witness_not_built": {
+          "value": "the witness role is not built in this version and refuses to start with exit 2",
+          "why": "a witness that came up and witnessed nothing would read as a record nobody rewrote; it arrives in its own pull request"
+        },
+        "socket_dir_conditional": {
+          "value": "KEYRYX_SOCKET_DIR is required once a consumer in KEYRYX_POLICY authenticates by socket, and KEYRYX_K8S_ISSUERS once one authenticates by a projected service-account token",
+          "why": "the manifest's required/optional split cannot express a variable required only by what another one says; internal/config holds the conditional rule and its tests"
+        },
+        "admin_keys_default": {
+          "value": "unset: rotate and revoke refuse every call (403)",
+          "why": "optional because a deployment may rotate by restarting with a new policy; fail closed when unset, never open"
         }
       }
     }

@@ -9,3 +9,4 @@ gates:
 	./scripts/dependencies-are-argued.sh
 	./scripts/no-owner-quotes.sh
 	./scripts/no-long-dashes.sh
+	./scripts/private-keys-stay-in-the-store.sh
