@@ -145,6 +145,7 @@ docs or commit messages, as tooling for acting against anyone else.
     record whose id is not its public key's thumbprint, or whose private half is
     not its public key's, refuses the start. *(tests:
     `TestAWrappedKeyOpensOnlyUnderItsOwnRootAndName`, `TestATamperedRecordRefusesToOpen`,
+    `TestARecordWhoseKidIsNotItsThumbprintRefusesTheStart`,
     `TestHostileRecordFilesNeverPanicAndNeverSignWithAnUnpublishedKey`)*
 
 20. **A rotation publishes the next key before it signs.** The next key is in

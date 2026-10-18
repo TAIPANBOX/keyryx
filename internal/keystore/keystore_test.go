@@ -289,6 +289,62 @@ func TestATamperedRecordRefusesToOpen(t *testing.T) {
 
 // Random damage to a stored record either refuses the open or leaves a store
 // whose signature verifies with the key it publishes; nothing panics.
+// The kid is what a verifier picks a key by, so it is recomputed from the
+// public key on every start and never taken from the record. These records
+// are wrapped under the right root key, name and kid, so only that recomputing
+// can refuse them: one names a made-up kid, one names the published kid and
+// holds another key.
+func TestARecordWhoseKidIsNotItsThumbprintRefusesTheStart(t *testing.T) {
+	c := &clock{t0}
+	for what, forge := range map[string]func(published string) string{
+		"a made-up kid":                      func(string) string { return "forged-kid" },
+		"the published kid over another key": func(p string) string { return p },
+	} {
+		dir := dataDir(t)
+		s := open(t, dir, rootA, declared[:1], c)
+		published := activeKid(t, s, "approval")
+		for _, f := range recordFiles(t, dir) {
+			if err := os.Remove(f); err != nil {
+				t.Fatal(err)
+			}
+		}
+		s.mu.Lock()
+		h, err := s.generateLocked("approval", policy.ES256, Active, 0)
+		if err != nil {
+			s.mu.Unlock()
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(dir, "keys", "approval", fileName(h.rec.Kid))); err != nil {
+			s.mu.Unlock()
+			t.Fatal(err)
+		}
+		h.rec.Kid = forge(published)
+		err = s.persist(h)
+		s.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := recordFiles(t, dir); len(got) != 1 {
+			t.Fatalf("%s: the forged store holds %d records, want 1", what, len(got))
+		}
+		if _, err := Open(dir, rootA, declared[:1], c.Now); err == nil {
+			t.Errorf("%s: a record whose kid is not its public key's thumbprint opened", what)
+		}
+	}
+	// Control: the same steps with the kid left as generated open.
+	dir := dataDir(t)
+	s := open(t, dir, rootA, declared[:1], c)
+	s.mu.Lock()
+	_, err := s.generateLocked("approval", policy.ES256, Retired, 0)
+	s.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(dir, rootA, declared[:1], c.Now); err != nil {
+		t.Fatalf("control: an honest second record refused the start: %v", err)
+	}
+}
+
 func TestHostileRecordFilesNeverPanicAndNeverSignWithAnUnpublishedKey(t *testing.T) {
 	c := &clock{t0}
 	base := dataDir(t)

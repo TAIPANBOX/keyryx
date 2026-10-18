@@ -96,6 +96,12 @@ Feature: Custody holds keys and signs only for the consumer they were granted to
     When custody starts
     Then it refuses
 
+  # @test:TestARecordWhoseKidIsNotItsThumbprintRefusesTheStart
+  Scenario: A stored key's id is always its public key's own
+    Given a record wrapped under the right root key that names a made-up key id, or the published key id over another key
+    When custody starts
+    Then it refuses, and an honest second record does not
+
   # @test:TestHostileRecordFilesNeverPanicAndNeverSignWithAnUnpublishedKey
   Scenario: Damage to a stored key never signs with an unpublished key
     Given fifteen hundred random edits of a stored record
