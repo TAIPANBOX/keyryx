@@ -243,7 +243,7 @@ func TestATamperedRecordRefusesToOpen(t *testing.T) {
 		"an unknown algorithm":   func(r map[string]any) { r["alg"] = "HS256" },
 		"an unknown state":       func(r map[string]any) { r["state"] = "dormant" },
 		"an unknown field":       func(r map[string]any) { r["private"] = "here" },
-		"a version from later":   func(r map[string]any) { r["v"] = 2 },
+		"a version from later":   func(r map[string]any) { r["v"] = 3 },
 		"the wrapped bytes cut":  func(r map[string]any) { r["wrapped"] = r["wrapped"].(string)[:10] },
 		"the nonce changed":      func(r map[string]any) { r["nonce"] = base64.RawURLEncoding.EncodeToString(make([]byte, 12)) },
 		"the wrapped bytes gone": func(r map[string]any) { delete(r, "wrapped") },
@@ -268,20 +268,25 @@ func TestATamperedRecordRefusesToOpen(t *testing.T) {
 		}
 	}
 	// Two active keys for one name: a store that picked either would sign with
-	// a key nobody can say was the current one.
+	// a key nobody can say was the current one. A state edited by hand is an
+	// alarm (state_test.go); two actives under valid state MACs could only be
+	// custody's own writer going wrong, so they are forged through it here.
 	dir := dataDir(t)
 	s := open(t, dir, rootA, declared[:1], c)
-	if _, err := s.Rotate("approval", time.Minute); err != nil {
+	next, err := s.Rotate("approval", time.Minute)
+	if err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range recordFiles(t, dir) {
-		raw, _ := os.ReadFile(f)
-		var rec map[string]any
-		_ = json.Unmarshal(raw, &rec)
-		rec["state"] = "active"
-		b, _ := json.Marshal(rec)
-		_ = os.WriteFile(f, b, 0o600)
+	s.mu.Lock()
+	for _, h := range s.keys["approval"] {
+		if h.rec.Kid == next.Kid {
+			h.rec.State = Active
+			if err := s.persist(h); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
+	s.mu.Unlock()
 	if _, err := Open(dir, rootA, declared[:1], c.Now); err == nil {
 		t.Error("two active keys for one name: the store opened")
 	}
@@ -351,10 +356,20 @@ func TestHostileRecordFilesNeverPanicAndNeverSignWithAnUnpublishedKey(t *testing
 	open(t, base, rootA, declared[:1], c)
 	f := recordFiles(t, base)[0]
 	orig, _ := os.ReadFile(f)
+	// A damaged active record is alarmed and replaced by a fresh key, which
+	// the store writes; each case starts from the one original record again.
+	clean := func() {
+		for _, g := range recordFiles(t, base) {
+			if g != f {
+				_ = os.Remove(g)
+			}
+		}
+	}
 	r := rand.New(rand.NewPCG(20261018, 3))
 	alphabet := []byte(`{}[]",:0123456789abcdefABCDEF-_ ` + "\x00\xff\n")
 	opened := 0
 	for i := 0; i < 1500; i++ {
+		clean()
 		b := append([]byte(nil), orig...)
 		for k := 0; k <= r.IntN(4); k++ {
 			j := r.IntN(len(b))
@@ -395,10 +410,11 @@ func TestHostileRecordFilesNeverPanicAndNeverSignWithAnUnpublishedKey(t *testing
 	if err := os.WriteFile(f, orig, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	clean()
 	if _, err := Open(base, rootA, declared[:1], c.Now); err != nil {
 		t.Fatalf("control: the undamaged record no longer opens: %v", err)
 	}
-	t.Logf("%d of 1500 damaged records opened (whitespace and the like), every one consistent", opened)
+	t.Logf("%d of 1500 damaged records opened (whitespace, or a state edit it alarmed), every one consistent", opened)
 }
 
 func TestRotationPublishesTheNextKeyBeforeItSigns(t *testing.T) {

@@ -225,7 +225,14 @@ func (s *Server) state(w http.ResponseWriter, _ *http.Request) {
 		}
 		keys = append(keys, ks)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"role": "custody", "version": s.Version, "root_key": "loaded", "keys": keys})
+	// A state custody found on disk and could not vouch for: the key it
+	// names is treated as revoked, and the alarm stays until an admin
+	// revokes that key (CLAUDE.md invariant 30).
+	alarms := append(s.Store.Alarms(), s.certAlarms()...)
+	if alarms == nil {
+		alarms = []keystore.Alarm{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"role": "custody", "version": s.Version, "root_key": "loaded", "keys": keys, "alarms": alarms})
 }
 
 func (s *Server) inventory(w http.ResponseWriter, _ *http.Request) {
@@ -435,6 +442,13 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, publicRecord(rec))
+}
+
+func (s *Server) certAlarms() []keystore.Alarm {
+	if s.Certs == nil {
+		return nil
+	}
+	return s.Certs.Alarms()
 }
 
 func (s *Server) certs() []certify.Entry {

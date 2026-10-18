@@ -7,7 +7,7 @@ writers who saw the record when it was written.**
 
 [![CI](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-83-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-91-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/runtime%20dependencies-1-blue.svg)
 
@@ -63,6 +63,12 @@ KEYRYX_DATA=/var/lib/keyryx KEYRYX_ROOT_KEY_FILE=/run/secrets/keyryx-root \
   `KEYRYX_DATA/keys/<name>/`, its private half wrapped with AES-256-GCM under a
   key derived from the root key and bound to the key's name, id and
   algorithm. A record moved, edited or swapped refuses the start.
+- **A state MAC on every record**, under another key derived from the root
+  key: a key's state (active, next, retired, revoked) and its dates, and a
+  statement's revocation, are custody's own word. A record whose MAC does not
+  hold is treated as revoked, never published or used, and raises an alarm:
+  on stderr and on the use log at every start, and in `GET /v1/state`, until
+  an admin revokes the key it names.
 - **A delegation root**, two keys of one generation, ES384 and ML-DSA-65, in
   the store's reserved `keyryx.` name space. It signs key statements and
   nothing a request chose.
@@ -79,7 +85,7 @@ KEYRYX_DATA=/var/lib/keyryx KEYRYX_ROOT_KEY_FILE=/run/secrets/keyryx-root \
 | route | who | what |
 |---|---|---|
 | `GET /healthz` | anyone | liveness |
-| `GET /v1/state` | anyone | the role, the version, each key's active and next key id |
+| `GET /v1/state` | anyone | the role, the version, each key's active and next key id, and `alarms`: every state on disk custody could not vouch for |
 | `GET /v1/keys` | anyone | the inventory: every key id, its algorithm, its state and its dates, revoked ones included; never a private member |
 | `GET /v1/jwks/{name}` | anyone | the key set a verifier caches: for a held key its active, next and retired keys; for a delegated name every key certified for it up to its `not_after` plus the overlap; for `keyryx.delegation-root` both halves of the root; never a revoked key |
 | `GET /v1/statements/{kid}` | anyone | `{"statement", "revoked_at"}`: the statement that certified a delegated key, and when it was revoked (0 when it was not) |
@@ -187,7 +193,7 @@ start.
 
 ## Testing
 
-83 tests. Tier T3: these are key and signature decisions where a wrong answer
+91 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
 mutation-tested.
 
@@ -215,9 +221,11 @@ Stated here rather than left to be discovered.
   and renew delegated keys are later pull requests in their own repositories;
   the round trip with the estate's shared verifier is tested here, not run by
   a consumer.
-- **A key's state on disk is not authenticated.** Whoever can write the data
-  directory can mark a revoked key or statement as not revoked; the use log's
-  line for the revocation stays, and the witness is what would notice.
+- **An earlier record can be put back.** The state MAC proves custody wrote a
+  state, not that it is the latest one: whoever can write the data directory
+  can restore a copy of a record from before its revocation, and that copy's
+  MAC holds. The use log keeps the revocation line, and the witness is what
+  would notice.
 - **Challenges live in memory.** A restart drops the outstanding ones, and the
   consumer asks again.
 - **A late renewal can sign before verifiers refresh.** When a name's current
