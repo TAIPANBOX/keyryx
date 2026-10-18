@@ -7,7 +7,7 @@ writers who saw the record when it was written.**
 
 [![CI](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-149-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-153-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/runtime%20dependencies-2-blue.svg)
 
@@ -211,10 +211,15 @@ Every `KEYRYX_WITNESS_INTERVAL` it reads, read-only:
   `witness_chain_restarted`, medium when a `resume` checkpoint explains it.
 - **every checkpoint file** in `KEYRYX_WITNESS_CHECKPOINTS`, by SPEC 6.5.1's
   steps: each record its own RFC 8785 form, signed by a key whose statement
-  custody serves (`KEYRYX_WITNESS_CUSTODY_URL`), valid at the record's time
-  and not revoked when the witness read it, and every checkpoint it kept
-  still holding. A record that does not is `witness_checkpoint_invalid`; an
-  unsigned one is `witness_checkpoint_unsigned`.
+  custody serves (`KEYRYX_WITNESS_CUSTODY_URL`), valid at the record's time,
+  not revoked when the witness read it, and certified for the key name that
+  stream is bound to (`KEYRYX_WITNESS_STREAM_KEYS`), and every checkpoint it
+  kept still holding. A record that does not is `witness_checkpoint_invalid`;
+  an unsigned one is `witness_checkpoint_unsigned`; while custody does not
+  answer, a record waits. Statements verify only under the delegation root
+  the witness pinned in its own log when it first read it: a different set
+  served later is a high `witness_checkpoint_invalid` about the
+  `delegation-root`, and is not used until an operator pins it.
 - **every trailryx data directory** in `KEYRYX_WITNESS_RECORDS`. It computes
   the store root as trailryx-verify does and attests to each new one in
   trailryx-sign's `witness_statement` bytes with its ES384 half, written to
@@ -247,6 +252,8 @@ time-stamped every `KEYRYX_WITNESS_TSA_EVERY` and the token goes into the log.
 | `KEYRYX_WITNESS_EVENTS` | yes | the bus directory it reads |
 | `KEYRYX_WITNESS_CHECKPOINTS` | no | the checkpoint directory it reads |
 | `KEYRYX_WITNESS_CUSTODY_URL` | once checkpoints are set | where custody serves key statements |
+| `KEYRYX_WITNESS_STREAM_KEYS` | once checkpoints are set | `stream.ndjson\|key-name` per stream, comma or line separated: the delegated key name whose certified keys sign that stream's checkpoints |
+| `KEYRYX_WITNESS_DELEGATION_ROOT_PIN` | no | the delegation root's kids, at least one ES384 and one ML-DSA-65, comma separated; replaces the pin in the log. Unset, the first set custody serves is pinned |
 | `KEYRYX_WITNESS_ALERTS` | no | where it writes its findings; default `<events>/keyryx.ndjson` |
 | `KEYRYX_WITNESS_RECORDS` | no | `tenant\|directory` per trailryx data directory, comma or line separated |
 | `KEYRYX_WITNESS_ADDR` | no | default `127.0.0.1:4341` |
@@ -266,7 +273,8 @@ time-stamped every `KEYRYX_WITNESS_TSA_EVERY` and the token goes into the log.
 keyryx verify log --dir /var/lib/keyryx-witness --keys witness-keys.json
 # streams and their checkpoints, against saved statements and the delegation root
 keyryx verify streams --events events/ --checkpoints checkpoints/ \
-  --statements statements/ --roots delegation-root.json
+  --statements statements/ --stream-keys 'wardryx.ndjson|wardryx-stream' \
+  --roots delegation-root.json
 ```
 
 Each check prints `[ok]`, `[weak]` or `[broken]`, and the last line says
@@ -276,7 +284,7 @@ each what `GET /v1/statements/{kid}` answered.
 
 ## Testing
 
-149 tests. Tier T3: these are key and signature decisions where a wrong answer
+153 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
 mutation-tested.
 
@@ -315,6 +323,14 @@ Stated here rather than left to be discovered.
 - **No time-stamping authority has been asked.** The RFC 3161 client is
   tested against an authority the tests build, with ECDSA and RSA keys; no
   public authority's token has been verified by it.
+- **The first root is taken on first use.** With no
+  `KEYRYX_WITNESS_DELEGATION_ROOT_PIN`, the witness pins whatever root set
+  custody serves at its first read; a set swapped before that read is pinned.
+  An operator closes that window by setting `KEYRYX_WITNESS_DELEGATION_ROOT_PIN`
+  from the kids of the delegation root's published key set before the witness
+  first starts. A real
+  rotation of the delegation root reads as a changed root until an operator
+  pins the new set, and no rotation has been run against a witness here.
 - **The witness reads the bus and the record, not custody's use log**, and
   custody writes no `key_rotated` or `key_revoked` event yet.
 - **Nothing consumes a key statement yet.** The delegation service, the

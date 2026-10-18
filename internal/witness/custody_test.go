@@ -39,7 +39,10 @@ type fakeCustody struct {
 	name    string
 	revoked int64
 	down    bool
-	srv     *httptest.Server
+	// stmtsDown is the statements route alone failing; garbled serves a
+	// root key set that does not read.
+	stmtsDown, garbled bool
+	srv                *httptest.Server
 }
 
 func rootStore(t *testing.T, b byte) *keystore.Store {
@@ -70,12 +73,16 @@ func newFakeCustody(t *testing.T, pub *ecdsa.PublicKey, name string) *fakeCustod
 func (f *fakeCustody) serve(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.down {
+	if f.down || (f.stmtsDown && strings.HasPrefix(r.URL.Path, "/v1/statements/")) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
 	switch r.URL.Path {
 	case "/v1/jwks/" + statement.RootName:
+		if f.garbled {
+			_, _ = w.Write([]byte(`{"keys": [{"kty": "oct"}]}`))
+			return
+		}
 		var keys []map[string]any
 		for _, s := range f.roots {
 			for _, n := range []string{statement.RootES384, statement.RootMLDSA} {
@@ -237,6 +244,12 @@ func TestAChangedDelegationRootIsAHighFindingAndIsNotUsed(t *testing.T) {
 	if !rootFinding || !recordRefused {
 		t.Fatalf("a swapped delegation root: %+v", findings)
 	}
+	// Once per set: the next interval says nothing new about the root.
+	for _, fd := range s.tick() {
+		if fd.Data["subject"] == RootSubject {
+			t.Fatalf("the same changed root was reported twice: %+v", fd)
+		}
+	}
 	// After a restart the pin is still the one in the log.
 	s.restart()
 	s.emit("wardryx.ndjson", 1)
@@ -258,37 +271,61 @@ func TestAChangedDelegationRootIsAHighFindingAndIsNotUsed(t *testing.T) {
 	if got := s.tick(); len(got) != 0 {
 		t.Fatalf("after a re-pin: %+v", got)
 	}
+	// A key set that does not read is a finding about the root too.
+	f.mu.Lock()
+	f.garbled = true
+	f.mu.Unlock()
+	got := s.tick()
+	if len(got) != 1 || got[0].Severity != "high" || got[0].Data["subject"] != RootSubject || !strings.Contains(fmt.Sprint(got[0].Data["reason"]), "does not read") {
+		t.Fatalf("a root key set that does not read: %+v", got)
+	}
 }
 
 // Custody unreachable is not a record that does not hold: the checkpoint
-// waits, as one ahead of the stream does, and nothing is raised.
+// waits, as one ahead of the stream does, and nothing is raised. That holds
+// before any root is pinned, with only the statements failing, and with
+// custody down after the pin.
 func TestACheckpointWaitsWhileCustodyIsUnreachable(t *testing.T) {
 	s := newStand(t, nil)
 	f := newFakeCustody(t, &s.key.PublicKey, "wardryx-stream")
 	s.custody = &CustodyKeys{Base: f.srv.URL, HTTP: f.srv.Client(), TTL: time.Nanosecond}
 	s.restart()
+	set := func(down, stmtsDown bool) {
+		f.mu.Lock()
+		f.down, f.stmtsDown = down, stmtsDown
+		f.mu.Unlock()
+	}
+	accepted := func(count int64) int {
+		n := 0
+		for _, e := range s.log.Entries() {
+			if e.Kind == "checkpoint" && e.Count == count {
+				n++
+			}
+		}
+		return n
+	}
+	set(true, false)
 	s.emit("wardryx.ndjson", 2)
-	s.tick()
-	f.mu.Lock()
-	f.down = true
-	f.mu.Unlock()
 	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
 	if got := s.tick(); len(got) != 0 {
-		t.Fatalf("custody down raised %+v", got)
+		t.Fatalf("custody down before any root was pinned raised %+v", got)
 	}
-	f.mu.Lock()
-	f.down = false
-	f.mu.Unlock()
+	set(false, true)
 	if got := s.tick(); len(got) != 0 {
-		t.Fatalf("custody back: %+v", got)
+		t.Fatalf("custody's statements down raised %+v", got)
 	}
-	n := 0
-	for _, e := range s.log.Entries() {
-		if e.Kind == "checkpoint" && e.Count == 2 {
-			n++
-		}
+	set(false, false)
+	if got := s.tick(); len(got) != 0 || accepted(2) != 1 {
+		t.Fatalf("custody back: %+v, the record that waited accepted %d times", got, accepted(2))
 	}
-	if n != 1 {
-		t.Fatalf("the record that waited was accepted %d times", n)
+	s.emit("wardryx.ndjson", 1)
+	set(true, false)
+	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
+	if got := s.tick(); len(got) != 0 {
+		t.Fatalf("custody down after the pin raised %+v", got)
+	}
+	set(false, false)
+	if got := s.tick(); len(got) != 0 || accepted(3) != 1 {
+		t.Fatalf("custody back after the pin: %+v, accepted %d times", got, accepted(3))
 	}
 }

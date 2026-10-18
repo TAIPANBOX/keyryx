@@ -52,6 +52,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -92,9 +93,11 @@ type Config struct {
 	SealLines                         int64
 	Name                              string
 	// StreamKeys binds each stream to the delegated key name its producer's
-	// checkpoint key is certified under. Scaffold: unused.
+	// checkpoint key is certified under: a key certified for another name
+	// does not sign that stream's checkpoints.
 	StreamKeys map[string]string
-	// RootPin is an operator's re-pin of the delegation root. Scaffold: unused.
+	// RootPin is an operator's pin of the delegation root's kids. Unset, the
+	// witness pins the set custody serves when it first reads it.
 	RootPin []string
 }
 
@@ -109,6 +112,17 @@ type Certified struct {
 type Keys interface {
 	Key(kid string, at, seen time.Time) (Certified, error)
 }
+
+// RootChecker is a Keys that reads its delegation root from somewhere the
+// witness does not control: the witness pins the set it first accepts, and
+// the client verifies statements only under the pin.
+type RootChecker interface {
+	RootKids(seen time.Time) ([]string, error)
+	Pin(kids []string)
+}
+
+// RootSubject is the subject of a finding about the delegation root itself.
+const RootSubject = "delegation-root"
 
 // Finding is one thing the witness disagrees with.
 type Finding struct {
@@ -168,6 +182,8 @@ type Witness struct {
 	lastRootAt  map[string]time.Time
 	linesAtRoot map[string]int64
 	missing     map[string]bool
+	pin         []string
+	rootSaid    string
 }
 
 // New rebuilds the witness's state from its log.
@@ -180,6 +196,9 @@ func New(cfg Config, log *wlog.Log, signer statement.Signer, keys Keys, alerts A
 	}
 	if log == nil || signer == nil || alerts == nil || now == nil || (cfg.Checkpoints != "" && keys == nil) {
 		return nil, errors.New("witness: a log, a signer, an alerter, a clock, and keys for checkpoints, are all required")
+	}
+	if cfg.Checkpoints != "" && len(cfg.StreamKeys) == 0 {
+		return nil, errors.New("witness: checkpoints are read, and no stream is bound to the key that signs them")
 	}
 	w := &Witness{cfg: cfg, log: log, signer: signer, keys: keys, alerts: alerts, now: now,
 		streams: map[string]*streamState{}, roots: map[string]*rootState{}, lastRootAt: map[string]time.Time{},
@@ -215,6 +234,8 @@ func New(cfg Config, log *wlog.Log, signer statement.Signer, keys Keys, alerts A
 			if e.Type == RootMissing {
 				w.missing[e.Tenant] = true
 			}
+		case "delegation_root":
+			w.pin = append([]string(nil), e.Kids...)
 		}
 	}
 	return w, nil
@@ -244,6 +265,8 @@ type tick struct {
 	now      time.Time
 	entries  []wlog.Entry
 	findings []Finding
+	// wait is custody unreachable: checkpoints stay where they are.
+	wait bool
 }
 
 func (t *tick) find(typ string, explained bool, data map[string]any) {
@@ -273,6 +296,7 @@ func (w *Witness) Tick() ([]Finding, error) {
 		}
 	}
 	sort.Strings(names)
+	w.checkRoot(t)
 	for _, name := range names {
 		if err := w.stream(t, name); err != nil {
 			return nil, err
@@ -302,6 +326,57 @@ func (w *Witness) Tick() ([]Finding, error) {
 		return nil, fmt.Errorf("witness: signing the tree head: %w", err)
 	}
 	return t.findings, alertErr
+}
+
+// checkRoot keeps the delegation root pinned: an operator's pin replaces the
+// one in the log, the first set custody serves is pinned when there is none,
+// and a served set that differs from the pin is a high finding, once per
+// set. Statements are verified only under the pin, whatever is served.
+func (w *Witness) checkRoot(t *tick) {
+	rc, ok := w.keys.(RootChecker)
+	if w.cfg.Checkpoints == "" || !ok {
+		return
+	}
+	if len(w.cfg.RootPin) > 0 {
+		want := sortedCopy(w.cfg.RootPin)
+		if !slices.Equal(want, w.pin) {
+			w.pin, w.rootSaid = want, ""
+			t.entries = append(t.entries, wlog.Entry{Kind: "delegation_root", SeenAt: t.now.Unix(), Kids: want, Mode: "operator"})
+		}
+	}
+	served, err := rc.RootKids(t.now)
+	switch {
+	case errors.Is(err, ErrUnavailable):
+		t.wait = true
+	case err != nil:
+		w.rootFinding(t, "custody serves a delegation root key set that does not read: "+err.Error(), nil)
+	case len(w.pin) == 0 && len(served) > 0:
+		w.pin = sortedCopy(served)
+		t.entries = append(t.entries, wlog.Entry{Kind: "delegation_root", SeenAt: t.now.Unix(), Kids: w.pin, Mode: "first-use"})
+	case !slices.Equal(served, w.pin):
+		w.rootFinding(t, "custody serves a delegation root other than the one this witness pinned; it is not used until an operator pins it", served)
+	default:
+		w.rootSaid = ""
+	}
+	if len(w.pin) > 0 {
+		rc.Pin(w.pin)
+	}
+}
+
+func (w *Witness) rootFinding(t *tick, reason string, served []string) {
+	said := reason + "|" + strings.Join(served, ",")
+	if said == w.rootSaid {
+		return
+	}
+	w.rootSaid = said
+	t.find(CheckpointInvalid, false, map[string]any{"subject": RootSubject, "count": int64(0), "reason": reason,
+		"pinned": strings.Join(w.pin, ","), "served": strings.Join(served, ",")})
+}
+
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
 }
 
 // lineView answers what the stream holds at a line count from what this read
@@ -507,6 +582,9 @@ func (w *Witness) checkpoints(t *tick, name string, st *streamState, view lineVi
 	if err != nil {
 		return false
 	}
+	if t.wait {
+		return false
+	}
 	resetToEnd := func(why string) bool {
 		t.find(CheckpointInvalid, false, map[string]any{"stream": name, "count": int64(0), "reason": why})
 		// Start again from the file as it now stands, so one rewrite is one
@@ -540,11 +618,20 @@ func (w *Witness) checkpoints(t *tick, name string, st *streamState, view lineVi
 		return false
 	}
 	moved := false
+	unavailable := false
 	keys := func(kid string, at time.Time) ([]byte, error) {
 		c, err := w.keys.Key(kid, at, t.now)
-		return c.Public, err
+		if err != nil {
+			unavailable = errors.Is(err, ErrUnavailable)
+			return nil, err
+		}
+		if err := CheckBound(w.cfg.StreamKeys, name, c); err != nil {
+			return nil, err
+		}
+		return c.Public, nil
 	}
 	r := bufio.NewReaderSize(f, 64<<10)
+read:
 	for {
 		line, err := readLine(r)
 		if err != nil {
@@ -567,6 +654,11 @@ func (w *Witness) checkpoints(t *tick, name string, st *streamState, view lineVi
 			t.find(CheckpointInvalid, false, map[string]any{"stream": name, "count": rec.Count, "reason": "the record names another stream"})
 		default:
 			status, reason := checkpoint.Verify(rec, prev, view, keys)
+			if unavailable {
+				// Custody did not answer, so nothing was refused: the record
+				// is read again next interval.
+				break read
+			}
 			switch status {
 			case checkpoint.Accepted:
 				at, _ := view.At(rec.Count)

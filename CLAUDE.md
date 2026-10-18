@@ -273,10 +273,14 @@ docs or commit messages, as tooling for acting against anyone else.
 32. **A checkpoint is checked by SPEC 6.5.1 format v1, step by step.** Its
     own RFC 8785 form and nothing else; its signature under a key a statement
     both halves of the delegation root signed, valid at the record's `at` and
-    not revoked by the time the witness saw it; its `prev`, `count`, `head` and
-    `prefix`; and every checkpoint kept before must still hold. A record ahead of
-    the stream waits for it; a restart is medium only when an accepted `resume`
-    at the line before explains it. *(tests: `TestTheSpecVectorsVerify`,
+    not revoked by the time the witness saw it, and certified for the key name
+    the operator bound that stream to (`KEYRYX_WITNESS_STREAM_KEYS`, required
+    with checkpoints): another producer's valid key does not sign this stream;
+    its `prev`, `count`, `head` and `prefix`; and every checkpoint kept before
+    must still hold. A record ahead of the stream waits for it, and so does one
+    whose statement custody could not be asked for: unreachable is not
+    refused. A restart is medium only when an accepted `resume` at the line
+    before explains it. *(tests: `TestTheSpecVectorsVerify`,
     `TestARecordThatIsNotItsOwnCanonicalFormIsRefused`,
     `TestAnUnsignedRecordIsReportedUnsignedNeverValid`,
     `TestPrevChainsAndADroppedRecordIsRefused`,
@@ -288,7 +292,20 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestARestartIsMediumWhenAResumeExplainsItAndHighWhenNothingDoes`,
     `TestTheCustodyClientTakesAKeyOnlyOnAStatementThatHolds`,
     `TestVerifyStreamsChecksCheckpointsAgainstTheirStatements`,
-    `TestALineLinkedElsewhereIsARestart`, `TestACheckpointFileRewrittenIsReported`)*
+    `TestALineLinkedElsewhereIsARestart`, `TestACheckpointFileRewrittenIsReported`,
+    `TestACheckpointSignedByAnotherProducersKeyIsInvalid`,
+    `TestACheckpointWaitsWhileCustodyIsUnreachable`)*
+37. **The witness pins the delegation root it first accepts.** The kids of the
+    root key set custody first serves are an entry in the witness's own signed
+    log (`delegation_root`), and a statement verifies only under those kids,
+    whatever else custody serves beside them. A served set that differs from
+    the pin is a high `witness_checkpoint_invalid` with subject
+    `delegation-root`, raised once per set, and the set is not used until an
+    operator pins it with `KEYRYX_WITNESS_DELEGATION_ROOT_PIN` (at least one
+    ES384 and one ML-DSA-65 kid), which is logged in turn. A restart reads the
+    pin back from the log. *(tests: `TestTheCustodyClientUsesOnlyThePinnedRoot`,
+    `TestAChangedDelegationRootIsAHighFindingAndIsNotUsed`,
+    `TestMalformedWitnessValuesRefuseTheStart`)*
 
 33. **The witness's own log is an RFC 9162 Merkle tree over SHA-384, and every
     head is signed by both halves of its key.** An entry per observation, a

@@ -172,7 +172,7 @@ func hexDecode(s string) ([]byte, error) {
 
 func verifyUsage(stderr io.Writer) int {
 	fmt.Fprint(stderr, `usage: keyryx verify log --dir <witness data directory> --keys <witness key set file>
-       keyryx verify streams --events <dir> --checkpoints <dir> --statements <dir> --roots <delegation root key set file>
+       keyryx verify streams --events <dir> --checkpoints <dir> --statements <dir> --stream-keys <stream|key-name,...> --roots <delegation root key set file>
 `)
 	return exitRefused
 }
@@ -192,7 +192,7 @@ func verify(args []string, stdout, stderr io.Writer) int {
 	ckpts := fs.String("checkpoints", "", "")
 	stmts := fs.String("statements", "", "")
 	rootsFile := fs.String("roots", "", "")
-	_ = fs.String("stream-keys", "", "")
+	streamKeys := fs.String("stream-keys", "", "")
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 		return verifyUsage(stderr)
 	}
@@ -211,7 +211,12 @@ func verify(args []string, stdout, stderr io.Writer) int {
 		rep := wlog.VerifyDir(*dir, keys)
 		lines, broken, measured = rep.Lines, rep.Broken, rep.Measured
 	case "streams":
-		if *events == "" || *ckpts == "" || *stmts == "" || *rootsFile == "" {
+		if *events == "" || *ckpts == "" || *stmts == "" || *rootsFile == "" || *streamKeys == "" {
+			return verifyUsage(stderr)
+		}
+		bound, err := witness.ParseStreamKeys(*streamKeys)
+		if err != nil {
+			fmt.Fprintf(stderr, "keyryx verify: --stream-keys: %v\n", err)
 			return verifyUsage(stderr)
 		}
 		roots, err := readKeys(*rootsFile)
@@ -219,7 +224,7 @@ func verify(args []string, stdout, stderr io.Writer) int {
 			lines, broken = append(lines, "[broken] roots: "+err.Error()), true
 			break
 		}
-		lines, broken, measured = verifyStreams(*events, *ckpts, *stmts, roots)
+		lines, broken, measured = verifyStreams(*events, *ckpts, *stmts, bound, roots)
 	default:
 		return verifyUsage(stderr)
 	}
@@ -243,8 +248,9 @@ func readKeys(path string) (statement.RootKey, error) {
 }
 
 // verifyStreams checks every stream that has a checkpoint file, record by
-// record, each key against the statement saved under its kid.
-func verifyStreams(events, ckpts, stmts string, roots statement.RootKey) ([]string, bool, bool) {
+// record, each key against the statement saved under its kid and the key
+// name the auditor bound that stream to.
+func verifyStreams(events, ckpts, stmts string, bound map[string]string, roots statement.RootKey) ([]string, bool, bool) {
 	var lines []string
 	broken, measured := false, false
 	entries, err := os.ReadDir(events)
@@ -258,19 +264,27 @@ func verifyStreams(events, ckpts, stmts string, roots statement.RootKey) ([]stri
 		}
 	}
 	sort.Strings(names)
-	keys := func(kid string, at time.Time) ([]byte, error) {
-		raw, err := os.ReadFile(filepath.Join(stmts, filepath.Base(kid)+".json")) // #nosec G304 -- a file in the directory the auditor named
-		if err != nil {
-			return nil, errors.New("no statement certifies that key in " + stmts)
+	keysFor := func(stream string) func(string, time.Time) ([]byte, error) {
+		return func(kid string, at time.Time) ([]byte, error) {
+			raw, err := os.ReadFile(filepath.Join(stmts, filepath.Base(kid)+".json")) // #nosec G304 -- a file in the directory the auditor named
+			if err != nil {
+				return nil, errors.New("no statement certifies that key in " + stmts)
+			}
+			st, revoked, err := witness.ParseStatementAnswer(raw)
+			if err != nil {
+				return nil, err
+			}
+			// Offline there is no witness clock: a record counts as seen at
+			// its own time, so a key revoked before then refuses it.
+			c, err := witness.KeyFromStatement(st, revoked, roots, kid, at, at)
+			if err != nil {
+				return nil, err
+			}
+			if err := witness.CheckBound(bound, stream, c); err != nil {
+				return nil, err
+			}
+			return c.Public, nil
 		}
-		st, revoked, err := witness.ParseStatementAnswer(raw)
-		if err != nil {
-			return nil, err
-		}
-		// Offline there is no witness clock: a record counts as seen at its
-		// own time, so a key revoked before then refuses it.
-		c, err := witness.KeyFromStatement(st, revoked, roots, kid, at, at)
-		return c.Public, err
 	}
 	for _, name := range names {
 		file, err := os.ReadFile(filepath.Join(ckpts, name+".ckpt.ndjson")) // #nosec G304 -- a file in the directory the auditor named
@@ -286,7 +300,7 @@ func verifyStreams(events, ckpts, stmts string, roots statement.RootKey) ([]stri
 			lines, broken = append(lines, fmt.Sprintf("[broken] %s: %v", name, err)), true
 			continue
 		}
-		for _, r := range checkpoint.VerifyFile(file, stream, keys) {
+		for _, r := range checkpoint.VerifyFile(file, stream, keysFor(name)) {
 			measured = true
 			switch r.Status {
 			case checkpoint.Accepted:

@@ -20,6 +20,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -49,7 +50,39 @@ type Config struct {
 	TSA                               *TSA
 }
 
-var tenantRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+var (
+	tenantRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	// An ES384 kid is an RFC 7638 thumbprint, an ML-DSA-65 kid the same
+	// with its prefix: both 43 base64url characters of SHA-256.
+	esKidRe = regexp.MustCompile(`^[A-Za-z0-9_-]{43}$`)
+	mlKidRe = regexp.MustCompile(`^mldsa65:[A-Za-z0-9_-]{43}$`)
+)
+
+// rootPin reads an operator's pin of the delegation root: its kids, at
+// least one of each half, since a statement verifies only under both.
+func rootPin(v string) ([]string, error) {
+	var kids []string
+	es, ml := false, false
+	for _, k := range strings.FieldsFunc(v, func(r rune) bool { return r == ',' || r == '\n' }) {
+		k = strings.TrimSpace(k)
+		switch {
+		case k == "":
+			continue
+		case esKidRe.MatchString(k):
+			es = true
+		case mlKidRe.MatchString(k):
+			ml = true
+		default:
+			return nil, fmt.Errorf("KEYRYX_WITNESS_DELEGATION_ROOT_PIN entry %q is not an ES384 or ML-DSA-65 kid", k)
+		}
+		kids = append(kids, k)
+	}
+	if !es || !ml {
+		return nil, errors.New("KEYRYX_WITNESS_DELEGATION_ROOT_PIN must name at least one ES384 and one ML-DSA-65 kid of the delegation root")
+	}
+	sort.Strings(kids)
+	return kids, nil
+}
 
 func duration(name string, def, lo, hi time.Duration) (time.Duration, error) {
 	v := os.Getenv(name)
@@ -145,6 +178,17 @@ func FromEnv() (Config, error) {
 		}
 		if c.CustodyURL == "" {
 			return c, errors.New("KEYRYX_WITNESS_CUSTODY_URL is not set and KEYRYX_WITNESS_CHECKPOINTS is: a checkpoint is checked against its key's statement, which custody serves")
+		}
+	}
+	if c.Witness.StreamKeys, err = witness.ParseStreamKeys(os.Getenv("KEYRYX_WITNESS_STREAM_KEYS")); err != nil {
+		return c, fmt.Errorf("KEYRYX_WITNESS_STREAM_KEYS: %w", err)
+	}
+	if c.Witness.Checkpoints != "" && len(c.Witness.StreamKeys) == 0 {
+		return c, errors.New("KEYRYX_WITNESS_STREAM_KEYS is not set and KEYRYX_WITNESS_CHECKPOINTS is: each stream's checkpoints are taken only under the key its producer is certified for")
+	}
+	if v := os.Getenv("KEYRYX_WITNESS_DELEGATION_ROOT_PIN"); v != "" {
+		if c.Witness.RootPin, err = rootPin(v); err != nil {
+			return c, err
 		}
 	}
 	if c.CustodyURL != "" {

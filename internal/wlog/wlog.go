@@ -57,8 +57,8 @@ type ShardSeen struct {
 	Manifests []string `json:"manifests,omitempty"`
 }
 
-// Entry is one observation. Kind is stream, checkpoint, root, finding or
-// anchor; the members a kind does not use are left out.
+// Entry is one observation. Kind is stream, checkpoint, root, finding,
+// anchor or delegation_root; the members a kind does not use are left out.
 type Entry struct {
 	Kind       string      `json:"kind"`
 	SeenAt     int64       `json:"seen_at"`

@@ -712,4 +712,10 @@ func TestACheckpointSignedByAnotherProducersKeyIsInvalid(t *testing.T) {
 	if f, ok := got["witness_checkpoint_invalid"]; !ok || f.Data["stream"] != "tokenfuse.ndjson" || !strings.Contains(fmt.Sprint(f.Data["reason"]), "no key") {
 		t.Fatalf("a checkpoint for a stream no key is bound to: %+v", got)
 	}
+	// Checkpoints read with no stream bound at all refuse the start.
+	cfg := s.cfg
+	cfg.StreamKeys = nil
+	if _, err := New(cfg, s.log, s.store, s.keys, s.alerts, s.clock); err == nil {
+		t.Fatal("a witness that reads checkpoints with no stream bound to a key started")
+	}
 }

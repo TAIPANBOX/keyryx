@@ -202,7 +202,7 @@ Feature: An independent witness of the record
   Scenario: Only the key bound to a stream may sign its checkpoints
     Given a checkpoint signed by a key certified for another name, and one for a stream no key is bound to
     When the witness reads them
-    Then each is invalid at high, naming the key the stream is bound to, and the stream's own key is accepted
+    Then each is invalid at high, naming the key the stream is bound to, the stream's own key is accepted, and a witness with no stream bound refuses to start
 
   # @test:TestTheCustodyClientUsesOnlyThePinnedRoot
   Scenario: The witness trusts only the delegation root it pinned
@@ -214,13 +214,13 @@ Feature: An independent witness of the record
   Scenario: A changed delegation root is a high finding and is never used
     Given a witness that pinned the root it first accepted in its log, and custody then serving another
     When checkpoints under the new root arrive, the witness restarts, and the operator re-pins
-    Then the change is a high finding, the records are refused before and after the restart, and accepted after the re-pin
+    Then the change is a high finding raised once, the records are refused before and after the restart, accepted after the re-pin, and a key set that does not read is a high finding too
 
   # @test:TestACheckpointWaitsWhileCustodyIsUnreachable
   Scenario: A checkpoint waits while custody is unreachable
-    Given custody answering 503 when a checkpoint arrives
+    Given custody answering 503 when a checkpoint arrives: before any root is pinned, for its statements alone, and after the pin
     When the witness reads, and reads again once custody answers
-    Then nothing is raised and the record is accepted once
+    Then nothing is raised and each record is accepted once
 
   # @test:TestAnHonestStreamIsWitnessedAndRaisesNothing
   Scenario: An honest stack raises nothing

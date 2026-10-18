@@ -31,6 +31,8 @@
           "KEYRYX_WITNESS_EVENTS": { "required": true, "role": "witness" },
           "KEYRYX_WITNESS_CHECKPOINTS": { "required": false, "role": "witness" },
           "KEYRYX_WITNESS_CUSTODY_URL": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_STREAM_KEYS": { "required": false, "role": "witness" },
+          "KEYRYX_WITNESS_DELEGATION_ROOT_PIN": { "required": false, "role": "witness" },
           "KEYRYX_WITNESS_ALERTS": { "required": false, "role": "witness" },
           "KEYRYX_WITNESS_RECORDS": { "required": false, "role": "witness" },
           "KEYRYX_WITNESS_ADDR": { "required": false, "role": "witness" },
@@ -58,7 +60,7 @@
           "why": "the uid and the volume each runs under are the launcher's to set; this repository can refuse sharing a path or a key, not choose a uid"
         },
         "witness_conditional": {
-          "value": "KEYRYX_WITNESS_CUSTODY_URL is required once KEYRYX_WITNESS_CHECKPOINTS is set, and KEYRYX_WITNESS_TSA_CA once KEYRYX_WITNESS_TSA_URL is",
+          "value": "KEYRYX_WITNESS_CUSTODY_URL and KEYRYX_WITNESS_STREAM_KEYS are required once KEYRYX_WITNESS_CHECKPOINTS is set, and KEYRYX_WITNESS_TSA_CA once KEYRYX_WITNESS_TSA_URL is",
           "why": "the manifest's required/optional split cannot express a variable required only by another one; internal/wconfig holds the conditional rule and its tests"
         },
         "tsa_opt_in": {
