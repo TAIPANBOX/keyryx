@@ -96,10 +96,11 @@ func TestVerifyRefusesToSayOKAboutNothing(t *testing.T) {
 		t.Fatalf("an empty directory: exit %d\n%s", code, out)
 	}
 	empty := t.TempDir()
-	if code, out, _ := call("verify", "streams", "--events", empty, "--checkpoints", empty, "--statements", empty, "--roots", keys); code != 1 || !strings.Contains(out, "measured nothing") {
+	if code, out, _ := call("verify", "streams", "--events", empty, "--checkpoints", empty, "--statements", empty, "--roots", keys, "--stream-keys", "wardryx.ndjson|wardryx-stream"); code != 1 || !strings.Contains(out, "measured nothing") {
 		t.Fatalf("no stream with checkpoints: exit %d\n%s", code, out)
 	}
-	for _, args := range [][]string{{"verify"}, {"verify", "log"}, {"verify", "log", "--dir", empty}, {"verify", "sideways"}} {
+	for _, args := range [][]string{{"verify"}, {"verify", "log"}, {"verify", "log", "--dir", empty}, {"verify", "sideways"},
+		{"verify", "streams", "--events", empty, "--checkpoints", empty, "--statements", empty, "--roots", keys}} {
 		if code, _, errOut := call(args...); code != exitRefused || !strings.Contains(errOut, "usage") {
 			t.Errorf("%v: exit %d, stderr %q", args, code, errOut)
 		}
@@ -177,9 +178,16 @@ func TestVerifyStreamsChecksCheckpointsAgainstTheirStatements(t *testing.T) {
 	}
 	stream, _ := os.ReadFile(filepath.Join(events, "wardryx.ndjson"))
 	_ = os.WriteFile(filepath.Join(ckpts, "wardryx.ndjson.ckpt.ndjson"), append(p.record(t, stream, "wardryx.ndjson", checkpoint.Genesis, t0.Add(time.Hour)), '\n'), 0o644)
-	args := []string{"verify", "streams", "--events", events, "--checkpoints", ckpts, "--statements", stmts, "--roots", roots}
+	args := []string{"verify", "streams", "--events", events, "--checkpoints", ckpts, "--statements", stmts, "--stream-keys", "wardryx.ndjson|wardryx-stream", "--roots", roots}
 	if code, out, _ := call(args...); code != 0 || !strings.Contains(out, "[ok]") || !strings.Contains(out, "VERIFIED") {
 		t.Fatalf("an honest stream: exit %d\n%s", code, out)
+	}
+	// The stream bound to another key name: a valid statement, and not this
+	// stream's producer's.
+	other := append([]string(nil), args...)
+	other[9] = "wardryx.ndjson|vouchryx-token"
+	if code, out, _ := call(other...); code != 1 || !strings.Contains(out, "vouchryx-token") {
+		t.Fatalf("a checkpoint signed by a key certified for another name: exit %d\n%s", code, out)
 	}
 	writeStatement(t0.Add(30 * time.Minute).Unix())
 	if code, out, _ := call(args...); code != 1 || !strings.Contains(out, "[broken]") {
@@ -193,11 +201,11 @@ func TestVerifyStreamsChecksCheckpointsAgainstTheirStatements(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(events, "wardryx.ndjson"), stream, 0o644)
 	odir := filepath.Join(base, "other")
 	_ = os.Mkdir(odir, 0o700)
-	other, err := keystore.Open(odir, [32]byte{8}, statement.RootKeys, func() time.Time { return t0 })
+	otherRoot, err := keystore.Open(odir, [32]byte{8}, statement.RootKeys, func() time.Time { return t0 })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code, _, _ := call(append(args[:len(args)-1], keySetFile(t, other, statement.RootES384, statement.RootMLDSA))...); code != 1 {
+	if code, _, _ := call(append(args[:len(args)-1], keySetFile(t, otherRoot, statement.RootES384, statement.RootMLDSA))...); code != 1 {
 		t.Fatalf("statements checked against another custody's root verified")
 	}
 }

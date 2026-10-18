@@ -23,7 +23,13 @@ import (
 var all = []string{"KEYRYX_WITNESS_DATA", "KEYRYX_WITNESS_ROOT_KEY_FILE", "KEYRYX_WITNESS_EVENTS", "KEYRYX_WITNESS_CHECKPOINTS",
 	"KEYRYX_WITNESS_CUSTODY_URL", "KEYRYX_WITNESS_ALERTS", "KEYRYX_WITNESS_RECORDS", "KEYRYX_WITNESS_ADDR", "KEYRYX_WITNESS_INTERVAL",
 	"KEYRYX_WITNESS_FULL_BYTES", "KEYRYX_WITNESS_FULL_INTERVAL", "KEYRYX_WITNESS_SEAL_EVERY", "KEYRYX_WITNESS_SEAL_LINES",
-	"KEYRYX_WITNESS_NAME", "KEYRYX_WITNESS_TSA_URL", "KEYRYX_WITNESS_TSA_CA", "KEYRYX_WITNESS_TSA_EVERY", "KEYRYX_DATA", "KEYRYX_ROOT_KEY_FILE"}
+	"KEYRYX_WITNESS_NAME", "KEYRYX_WITNESS_TSA_URL", "KEYRYX_WITNESS_TSA_CA", "KEYRYX_WITNESS_TSA_EVERY", "KEYRYX_DATA", "KEYRYX_ROOT_KEY_FILE",
+	"KEYRYX_WITNESS_STREAM_KEYS", "KEYRYX_WITNESS_DELEGATION_ROOT_PIN"}
+
+var (
+	esKid = strings.Repeat("E", 43)
+	mlKid = "mldsa65:" + strings.Repeat("M", 43)
+)
 
 func file(t *testing.T, dir, name, body string, mode os.FileMode) string {
 	t.Helper()
@@ -82,6 +88,8 @@ func TestAFullWitnessConfigComesUp(t *testing.T) {
 	_ = os.Mkdir(ckpts, 0o750)
 	env["KEYRYX_WITNESS_CHECKPOINTS"] = ckpts
 	env["KEYRYX_WITNESS_CUSTODY_URL"] = "http://127.0.0.1:4340"
+	env["KEYRYX_WITNESS_STREAM_KEYS"] = "wardryx.ndjson|wardryx-stream,tokenfuse.ndjson|tokenfuse-stream"
+	env["KEYRYX_WITNESS_DELEGATION_ROOT_PIN"] = esKid + "," + mlKid
 	env["KEYRYX_WITNESS_RECORDS"] = "acme|" + records
 	env["KEYRYX_WITNESS_INTERVAL"] = "30s"
 	env["KEYRYX_WITNESS_TSA_URL"] = "https://tsa.example/tsr"
@@ -89,6 +97,12 @@ func TestAFullWitnessConfigComesUp(t *testing.T) {
 	c, err := withEnv(t, env)
 	if err != nil || len(c.Witness.Records) != 1 || c.Witness.Records[0].Name != "acme" || c.TSA == nil || c.TSA.Every != time.Hour || c.CustodyURL == "" {
 		t.Fatalf("the full environment: %+v %v", c, err)
+	}
+	if c.Witness.StreamKeys["wardryx.ndjson"] != "wardryx-stream" || c.Witness.StreamKeys["tokenfuse.ndjson"] != "tokenfuse-stream" || len(c.Witness.StreamKeys) != 2 {
+		t.Fatalf("the stream keys: %v", c.Witness.StreamKeys)
+	}
+	if len(c.Witness.RootPin) != 2 || c.Witness.RootPin[0] != esKid || c.Witness.RootPin[1] != mlKid {
+		t.Fatalf("the root pin: %v", c.Witness.RootPin)
 	}
 }
 
@@ -105,8 +119,15 @@ func TestEachRequiredWitnessVariableIsNamedWhenMissing(t *testing.T) {
 	}
 	env := base(t)
 	env["KEYRYX_WITNESS_CHECKPOINTS"] = t.TempDir()
+	env["KEYRYX_WITNESS_STREAM_KEYS"] = "wardryx.ndjson|wardryx-stream"
 	if _, err := withEnv(t, env); err == nil || !strings.Contains(err.Error(), "KEYRYX_WITNESS_CUSTODY_URL") {
 		t.Errorf("checkpoints with no custody to ask for their statements: %v", err)
+	}
+	env = base(t)
+	env["KEYRYX_WITNESS_CHECKPOINTS"] = t.TempDir()
+	env["KEYRYX_WITNESS_CUSTODY_URL"] = "http://127.0.0.1:4340"
+	if _, err := withEnv(t, env); err == nil || !strings.Contains(err.Error(), "KEYRYX_WITNESS_STREAM_KEYS") {
+		t.Errorf("checkpoints with no stream bound to its key: %v", err)
 	}
 	env = base(t)
 	env["KEYRYX_WITNESS_TSA_URL"] = "https://tsa.example/tsr"
@@ -165,7 +186,18 @@ func TestMalformedWitnessValuesRefuseTheStart(t *testing.T) {
 			d := t.TempDir()
 			e["KEYRYX_WITNESS_RECORDS"] = "acme|" + d + ",acme|" + d
 		},
-		"a custody URL that is not one": func(e map[string]string) { e["KEYRYX_WITNESS_CUSTODY_URL"] = "custody" },
+		"a custody URL that is not one":  func(e map[string]string) { e["KEYRYX_WITNESS_CUSTODY_URL"] = "custody" },
+		"a stream key entry with no key": func(e map[string]string) { e["KEYRYX_WITNESS_STREAM_KEYS"] = "wardryx.ndjson" },
+		"a stream key for a file that is no stream": func(e map[string]string) {
+			e["KEYRYX_WITNESS_STREAM_KEYS"] = "../wardryx.ndjson|wardryx-stream"
+		},
+		"a stream key name outside the grammar": func(e map[string]string) { e["KEYRYX_WITNESS_STREAM_KEYS"] = "wardryx.ndjson|Wardryx Stream" },
+		"one stream bound to two keys": func(e map[string]string) {
+			e["KEYRYX_WITNESS_STREAM_KEYS"] = "wardryx.ndjson|a-stream,wardryx.ndjson|b-stream"
+		},
+		"a pinned kid that is not one": func(e map[string]string) { e["KEYRYX_WITNESS_DELEGATION_ROOT_PIN"] = "chosen," + mlKid },
+		"a pin with no ML-DSA half":    func(e map[string]string) { e["KEYRYX_WITNESS_DELEGATION_ROOT_PIN"] = esKid },
+		"a pin with no ES384 half":     func(e map[string]string) { e["KEYRYX_WITNESS_DELEGATION_ROOT_PIN"] = mlKid },
 		"a TSA over plain HTTP": func(e map[string]string) {
 			e["KEYRYX_WITNESS_TSA_URL"] = "http://tsa.example/tsr"
 			e["KEYRYX_WITNESS_TSA_CA"] = caPEM(t, t.TempDir())

@@ -85,6 +85,7 @@ type Entry struct {
 	Size       int64       `json:"size,omitempty"`
 	Token      string      `json:"token,omitempty"`
 	GenTime    int64       `json:"gen_time,omitempty"`
+	Kids       []string    `json:"kids,omitempty"`
 }
 
 // Sig is one half of a head's signature.

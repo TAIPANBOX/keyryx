@@ -91,12 +91,23 @@ type Config struct {
 	FullInterval, SealEvery           time.Duration
 	SealLines                         int64
 	Name                              string
+	// StreamKeys binds each stream to the delegated key name its producer's
+	// checkpoint key is certified under. Scaffold: unused.
+	StreamKeys map[string]string
+	// RootPin is an operator's re-pin of the delegation root. Scaffold: unused.
+	RootPin []string
 }
 
-// Keys answers which public key certifies a checkpoint's kid at the record's
-// time, given when the witness saw the record.
+// Certified is a key a statement certifies, and for whom.
+type Certified struct {
+	Public      []byte
+	Name, Owner string
+}
+
+// Keys answers which key a statement certifies for a checkpoint's kid at the
+// record's time, given when the witness saw the record.
 type Keys interface {
-	Key(kid string, at, seen time.Time) ([]byte, error)
+	Key(kid string, at, seen time.Time) (Certified, error)
 }
 
 // Finding is one thing the witness disagrees with.
@@ -529,7 +540,10 @@ func (w *Witness) checkpoints(t *tick, name string, st *streamState, view lineVi
 		return false
 	}
 	moved := false
-	keys := func(kid string, at time.Time) ([]byte, error) { return w.keys.Key(kid, at, t.now) }
+	keys := func(kid string, at time.Time) ([]byte, error) {
+		c, err := w.keys.Key(kid, at, t.now)
+		return c.Public, err
+	}
 	r := bufio.NewReaderSize(f, 64<<10)
 	for {
 		line, err := readLine(r)

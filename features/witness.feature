@@ -198,6 +198,30 @@ Feature: An independent witness of the record
     When the witness asks for keys of an uncertified kid, outside the statement's life, revoked before it saw the record, or under another custody's root
     Then it takes none of them, and takes the honest one and one seen before its revocation
 
+  # @test:TestACheckpointSignedByAnotherProducersKeyIsInvalid
+  Scenario: Only the key bound to a stream may sign its checkpoints
+    Given a checkpoint signed by a key certified for another name, and one for a stream no key is bound to
+    When the witness reads them
+    Then each is invalid at high, naming the key the stream is bound to, and the stream's own key is accepted
+
+  # @test:TestTheCustodyClientUsesOnlyThePinnedRoot
+  Scenario: The witness trusts only the delegation root it pinned
+    Given custody serving another root and a statement it signed, alone or beside the pinned root
+    When the witness asks for the key
+    Then it takes none, says what is served, takes it once the operator re-pins, and says custody is unreachable when it is
+
+  # @test:TestAChangedDelegationRootIsAHighFindingAndIsNotUsed
+  Scenario: A changed delegation root is a high finding and is never used
+    Given a witness that pinned the root it first accepted in its log, and custody then serving another
+    When checkpoints under the new root arrive, the witness restarts, and the operator re-pins
+    Then the change is a high finding, the records are refused before and after the restart, and accepted after the re-pin
+
+  # @test:TestACheckpointWaitsWhileCustodyIsUnreachable
+  Scenario: A checkpoint waits while custody is unreachable
+    Given custody answering 503 when a checkpoint arrives
+    When the witness reads, and reads again once custody answers
+    Then nothing is raised and the record is accepted once
+
   # @test:TestAnHonestStreamIsWitnessedAndRaisesNothing
   Scenario: An honest stack raises nothing
     Given streams growing and checkpoints signed over four intervals

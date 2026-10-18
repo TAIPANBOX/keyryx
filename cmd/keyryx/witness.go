@@ -192,6 +192,7 @@ func verify(args []string, stdout, stderr io.Writer) int {
 	ckpts := fs.String("checkpoints", "", "")
 	stmts := fs.String("statements", "", "")
 	rootsFile := fs.String("roots", "", "")
+	_ = fs.String("stream-keys", "", "")
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 		return verifyUsage(stderr)
 	}
@@ -268,7 +269,8 @@ func verifyStreams(events, ckpts, stmts string, roots statement.RootKey) ([]stri
 		}
 		// Offline there is no witness clock: a record counts as seen at its
 		// own time, so a key revoked before then refuses it.
-		return witness.KeyFromStatement(st, revoked, roots, kid, at, at)
+		c, err := witness.KeyFromStatement(st, revoked, roots, kid, at, at)
+		return c.Public, err
 	}
 	for _, name := range names {
 		file, err := os.ReadFile(filepath.Join(ckpts, name+".ckpt.ndjson")) // #nosec G304 -- a file in the directory the auditor named

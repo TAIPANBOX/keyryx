@@ -5,11 +5,15 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,74 +24,271 @@ import (
 
 // The witness takes a checkpoint key on custody's word, so that word must be
 // a statement both halves of the delegation root signed, for that kid, valid
-// then, and not revoked before the witness saw the record.
+// then, and not revoked before the witness saw the record; and the root must
+// be the one the witness pinned, not whatever custody, or something on the
+// path to it, serves today.
 
-func TestTheCustodyClientTakesAKeyOnlyOnAStatementThatHolds(t *testing.T) {
-	cdir := filepath.Join(t.TempDir(), "custody")
-	_ = os.Mkdir(cdir, 0o700)
-	custody, err := keystore.Open(cdir, [32]byte{7, 1}, statement.RootKeys, func() time.Time { return t0 })
+// fakeCustody serves one key's statement and a delegation root's key set,
+// both from a root store that a test can swap.
+type fakeCustody struct {
+	mu      sync.Mutex
+	t       *testing.T
+	roots   []*keystore.Store // the key sets served, together
+	signer  *keystore.Store   // the root that signs the statement
+	jwk     statement.JWK
+	name    string
+	revoked int64
+	down    bool
+	srv     *httptest.Server
+}
+
+func rootStore(t *testing.T, b byte) *keystore.Store {
+	t.Helper()
+	d := filepath.Join(t.TempDir(), "custody")
+	_ = os.Mkdir(d, 0o700)
+	s, err := keystore.Open(d, [32]byte{7, b}, statement.RootKeys, func() time.Time { return t0 })
 	if err != nil {
 		t.Fatal(err)
 	}
-	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	b, _ := json.Marshal(delegation.FromPublic(&k.PublicKey, ""))
-	jwk, pub, _ := statement.ParseJWK(b, "ES256")
-	raw, err := statement.Sign(statement.Statement{V: 1, Iss: statement.Issuer, Name: "wardryx-stream", Owner: "wardryx", Kid: jwk.Kid, JWK: jwk,
-		NotBefore: t0.Unix(), NotAfter: t0.Add(time.Hour).Unix(), IssuedAt: t0.Unix(), JTI: "jti-custody-0123456789"}, custody)
+	return s
+}
+
+func newFakeCustody(t *testing.T, pub *ecdsa.PublicKey, name string) *fakeCustody {
+	t.Helper()
+	b, _ := json.Marshal(delegation.FromPublic(pub, ""))
+	jwk, _, err := statement.ParseJWK(b, "ES256")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var revoked int64
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1/jwks/"+statement.RootName:
-			var keys []map[string]any
+	a := rootStore(t, 1)
+	f := &fakeCustody{t: t, roots: []*keystore.Store{a}, signer: a, jwk: jwk, name: name}
+	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+func (f *fakeCustody) serve(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.down {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	switch r.URL.Path {
+	case "/v1/jwks/" + statement.RootName:
+		var keys []map[string]any
+		for _, s := range f.roots {
 			for _, n := range []string{statement.RootES384, statement.RootMLDSA} {
-				recs, _ := custody.Published(n)
+				recs, _ := s.Published(n)
 				for _, rec := range recs {
 					keys = append(keys, keystore.JWK(rec))
 				}
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"keys": keys})
-		case r.URL.Path == "/v1/statements/"+jwk.Kid:
-			_ = json.NewEncoder(w).Encode(map[string]any{"statement": json.RawMessage(raw), "revoked_at": revoked})
-		default:
-			w.WriteHeader(http.StatusNotFound)
 		}
-	}))
-	defer srv.Close()
-	c := &CustodyKeys{Base: srv.URL, HTTP: srv.Client(), TTL: time.Nanosecond}
-	got, err := c.Key(jwk.Kid, t0.Add(time.Minute), t0.Add(2*time.Minute))
-	if err != nil || string(got) != string(pub) {
-		t.Fatalf("an honest statement: %v", err)
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": keys})
+	case "/v1/statements/" + f.jwk.Kid:
+		raw, err := statement.Sign(statement.Statement{V: 1, Iss: statement.Issuer, Name: f.name, Owner: "wardryx", Kid: f.jwk.Kid, JWK: f.jwk,
+			NotBefore: t0.Unix(), NotAfter: t0.Add(24 * time.Hour).Unix(), IssuedAt: t0.Unix(), JTI: "jti-custody-0123456789"}, f.signer)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"statement": json.RawMessage(raw), "revoked_at": f.revoked})
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+// kidsOf is a root store's published kids, sorted, as RootKids answers them.
+func kidsOf(stores ...*keystore.Store) []string {
+	var out []string
+	for _, s := range stores {
+		for _, n := range []string{statement.RootES384, statement.RootMLDSA} {
+			recs, _ := s.Published(n)
+			for _, r := range recs {
+				out = append(out, r.Kid)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func TestTheCustodyClientTakesAKeyOnlyOnAStatementThatHolds(t *testing.T) {
+	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	f := newFakeCustody(t, &k.PublicKey, "wardryx-stream")
+	pub, _ := k.PublicKey.Bytes()
+	c := &CustodyKeys{Base: f.srv.URL, HTTP: f.srv.Client(), TTL: time.Nanosecond}
+	kids, err := c.RootKids(t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Pin(kids)
+	got, err := c.Key(f.jwk.Kid, t0.Add(time.Minute), t0.Add(2*time.Minute))
+	if err != nil || string(got.Public) != string(pub) || got.Name != "wardryx-stream" || got.Owner != "wardryx" {
+		t.Fatalf("an honest statement: %+v %v", got, err)
 	}
 	for what, call := range map[string]func() error{
 		"a kid no statement certifies": func() error { _, err := c.Key(strings.Repeat("B", 43), t0, t0); return err },
-		"a record before not_before":   func() error { _, err := c.Key(jwk.Kid, t0.Add(-time.Second), t0); return err },
-		"a record after not_after":     func() error { _, err := c.Key(jwk.Kid, t0.Add(2*time.Hour), t0.Add(2*time.Hour)); return err },
+		"a record before not_before":   func() error { _, err := c.Key(f.jwk.Kid, t0.Add(-time.Second), t0); return err },
+		"a record after not_after":     func() error { _, err := c.Key(f.jwk.Kid, t0.Add(25*time.Hour), t0.Add(25*time.Hour)); return err },
 		"a key revoked before the witness saw the record": func() error {
-			revoked = t0.Add(30 * time.Minute).Unix()
-			_, err := c.Key(jwk.Kid, t0.Add(time.Minute), t0.Add(40*time.Minute))
+			f.revoked = t0.Add(30 * time.Minute).Unix()
+			_, err := c.Key(f.jwk.Kid, t0.Add(time.Minute), t0.Add(40*time.Minute))
 			return err
 		},
 	} {
-		revoked = 0
+		f.revoked = 0
 		if call() == nil {
 			t.Errorf("%s: a key was taken", what)
 		}
 	}
-	revoked = t0.Add(30 * time.Minute).Unix()
-	if _, err := c.Key(jwk.Kid, t0.Add(time.Minute), t0.Add(10*time.Minute)); err != nil {
+	f.revoked = t0.Add(30 * time.Minute).Unix()
+	if _, err := c.Key(f.jwk.Kid, t0.Add(time.Minute), t0.Add(10*time.Minute)); err != nil {
 		t.Fatalf("a record seen before its key was revoked: %v", err)
 	}
-	// Another custody's root: the statement does not verify.
-	odir := filepath.Join(t.TempDir(), "other")
-	_ = os.Mkdir(odir, 0o700)
-	other, _ := keystore.Open(odir, [32]byte{7, 2}, statement.RootKeys, func() time.Time { return t0 })
-	custody = other
-	c2 := &CustodyKeys{Base: srv.URL, HTTP: srv.Client()}
-	revoked = 0
-	if _, err := c2.Key(jwk.Kid, t0.Add(time.Minute), t0.Add(time.Minute)); err == nil {
-		t.Fatal("a statement under another custody's root was taken")
+	f.revoked = 0
+	if _, err := (&CustodyKeys{Base: f.srv.URL, HTTP: f.srv.Client()}).Key(f.jwk.Kid, t0, t0); err == nil {
+		t.Fatal("a client that pinned no root took a key")
+	}
+}
+
+func TestTheCustodyClientUsesOnlyThePinnedRoot(t *testing.T) {
+	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	f := newFakeCustody(t, &k.PublicKey, "wardryx-stream")
+	a := f.signer
+	c := &CustodyKeys{Base: f.srv.URL, HTTP: f.srv.Client(), TTL: time.Nanosecond}
+	c.Pin(kidsOf(a))
+	if _, err := c.Key(f.jwk.Kid, t0.Add(time.Minute), t0.Add(time.Minute)); err != nil {
+		t.Fatalf("control: under the pinned root: %v", err)
+	}
+	// Custody, or something on the path to it, serves another root and a
+	// statement that root signed.
+	b := rootStore(t, 2)
+	f.mu.Lock()
+	f.roots, f.signer = []*keystore.Store{b}, b
+	f.mu.Unlock()
+	served, err := c.RootKids(t0.Add(2 * time.Minute))
+	if err != nil || fmt.Sprint(served) != fmt.Sprint(kidsOf(b)) {
+		t.Fatalf("RootKids does not say what is served: %v %v", served, err)
+	}
+	if _, err := c.Key(f.jwk.Kid, t0.Add(time.Minute), t0.Add(3*time.Minute)); err == nil {
+		t.Fatal("a statement under a root the witness never pinned was taken")
+	}
+	// The pinned root served beside the other one: only the pinned keys count.
+	f.mu.Lock()
+	f.roots = []*keystore.Store{a, b}
+	f.mu.Unlock()
+	if _, err := c.Key(f.jwk.Kid, t0.Add(time.Minute), t0.Add(4*time.Minute)); err == nil {
+		t.Fatal("a statement signed by an unpinned root served beside the pinned one was taken")
+	}
+	c.Pin(kidsOf(b))
+	if _, err := c.Key(f.jwk.Kid, t0.Add(time.Minute), t0.Add(5*time.Minute)); err != nil {
+		t.Fatalf("after the operator re-pins: %v", err)
+	}
+	f.mu.Lock()
+	f.down = true
+	f.mu.Unlock()
+	if _, err := c.Key(f.jwk.Kid, t0.Add(time.Minute), t0.Add(6*time.Minute)); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("custody down: %v, want ErrUnavailable", err)
+	}
+	if _, err := c.RootKids(t0.Add(7 * time.Minute)); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("custody down, the root set: %v, want ErrUnavailable", err)
+	}
+}
+
+// The witness pins the delegation root it first accepts in its own signed
+// log. A different set served later is a high finding, and is never used.
+func TestAChangedDelegationRootIsAHighFindingAndIsNotUsed(t *testing.T) {
+	s := newStand(t, nil)
+	f := newFakeCustody(t, &s.key.PublicKey, "wardryx-stream")
+	s.custody = &CustodyKeys{Base: f.srv.URL, HTTP: f.srv.Client(), TTL: time.Nanosecond}
+	s.restart()
+	s.emit("wardryx.ndjson", 2)
+	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
+	if got := s.tick(); len(got) != 0 {
+		t.Fatalf("control: %+v", got)
+	}
+	pinned := false
+	for _, e := range s.log.Entries() {
+		if e.Kind == "delegation_root" && fmt.Sprint(e.Kids) == fmt.Sprint(kidsOf(f.signer)) {
+			pinned = true
+		}
+	}
+	if !pinned {
+		t.Fatal("the root the witness first accepted is not pinned in its log")
+	}
+	b := rootStore(t, 3)
+	f.mu.Lock()
+	f.roots, f.signer = []*keystore.Store{b}, b
+	f.mu.Unlock()
+	s.emit("wardryx.ndjson", 1)
+	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
+	findings := s.tick()
+	rootFinding, recordRefused := false, false
+	for _, fd := range findings {
+		if fd.Type == "witness_checkpoint_invalid" && fd.Severity == "high" && fd.Data["subject"] == "delegation-root" {
+			rootFinding = true
+		}
+		if fd.Type == "witness_checkpoint_invalid" && fd.Data["count"] == int64(3) {
+			recordRefused = true
+		}
+	}
+	if !rootFinding || !recordRefused {
+		t.Fatalf("a swapped delegation root: %+v", findings)
+	}
+	// After a restart the pin is still the one in the log.
+	s.restart()
+	s.emit("wardryx.ndjson", 1)
+	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
+	again := false
+	for _, fd := range s.tick() {
+		if fd.Type == "witness_checkpoint_invalid" && fd.Data["count"] == int64(4) {
+			again = true
+		}
+	}
+	if !again {
+		t.Fatal("after a restart a statement under the swapped root was taken")
+	}
+	// The operator re-pins: the new root is used, and the re-pin is logged.
+	s.cfg.RootPin = kidsOf(b)
+	s.restart()
+	s.emit("wardryx.ndjson", 1)
+	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
+	if got := s.tick(); len(got) != 0 {
+		t.Fatalf("after a re-pin: %+v", got)
+	}
+}
+
+// Custody unreachable is not a record that does not hold: the checkpoint
+// waits, as one ahead of the stream does, and nothing is raised.
+func TestACheckpointWaitsWhileCustodyIsUnreachable(t *testing.T) {
+	s := newStand(t, nil)
+	f := newFakeCustody(t, &s.key.PublicKey, "wardryx-stream")
+	s.custody = &CustodyKeys{Base: f.srv.URL, HTTP: f.srv.Client(), TTL: time.Nanosecond}
+	s.restart()
+	s.emit("wardryx.ndjson", 2)
+	s.tick()
+	f.mu.Lock()
+	f.down = true
+	f.mu.Unlock()
+	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
+	if got := s.tick(); len(got) != 0 {
+		t.Fatalf("custody down raised %+v", got)
+	}
+	f.mu.Lock()
+	f.down = false
+	f.mu.Unlock()
+	if got := s.tick(); len(got) != 0 {
+		t.Fatalf("custody back: %+v", got)
+	}
+	n := 0
+	for _, e := range s.log.Entries() {
+		if e.Kind == "checkpoint" && e.Count == 2 {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("the record that waited was accepted %d times", n)
 	}
 }

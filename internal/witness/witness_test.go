@@ -43,18 +43,19 @@ func (r *recorder) Alert(f Finding) error { r.got = append(r.got, f); return nil
 
 type fakeKeys struct {
 	pub     map[string][]byte
+	name    map[string]string
 	revoked map[string]bool
 }
 
-func (f *fakeKeys) Key(kid string, at, seen time.Time) ([]byte, error) {
+func (f *fakeKeys) Key(kid string, at, seen time.Time) (Certified, error) {
 	if f.revoked[kid] {
-		return nil, errors.New("the key was revoked before the witness saw this record")
+		return Certified{}, errors.New("the key was revoked before the witness saw this record")
 	}
 	p, ok := f.pub[kid]
 	if !ok {
-		return nil, errors.New("no statement certifies that key")
+		return Certified{}, errors.New("no statement certifies that key")
 	}
-	return p, nil
+	return Certified{Public: p, Name: f.name[kid], Owner: "test"}, nil
 }
 
 type stand struct {
@@ -66,6 +67,9 @@ type stand struct {
 	wdata   string
 	now     time.Time
 	cfg     Config
+	signKey *ecdsa.PrivateKey
+	signKid string
+	custody Keys
 	store   *keystore.Store
 	log     *wlog.Log
 	w       *Witness
@@ -98,9 +102,11 @@ func newStand(t *testing.T, edit func(*Config)) *stand {
 	s.key = k
 	s.kid, _ = delegation.Thumbprint(delegation.FromPublic(&k.PublicKey, ""))
 	pub, _ := k.PublicKey.Bytes()
-	s.keys = &fakeKeys{pub: map[string][]byte{s.kid: pub}, revoked: map[string]bool{}}
+	s.keys = &fakeKeys{pub: map[string][]byte{s.kid: pub}, name: map[string]string{s.kid: "wardryx-stream"}, revoked: map[string]bool{}}
+	s.signKey, s.signKid = s.key, s.kid
 	s.cfg = Config{Events: s.events, Checkpoints: s.ckpts, Records: []Tenant{{Name: "acme", Dir: s.records}}, Attestations: s.attest,
-		FullBytes: 1 << 30, FullInterval: time.Hour, SealEvery: 15 * time.Minute, SealLines: 4096, Name: "keyryx-witness"}
+		FullBytes: 1 << 30, FullInterval: time.Hour, SealEvery: 15 * time.Minute, SealLines: 4096, Name: "keyryx-witness",
+		StreamKeys: map[string]string{"wardryx.ndjson": "wardryx-stream", "garbage.ndjson": "garbage-stream"}}
 	if edit != nil {
 		edit(&s.cfg)
 	}
@@ -122,7 +128,11 @@ func (s *stand) restart() {
 	if err != nil {
 		s.t.Fatalf("wlog.Open: %v", err)
 	}
-	w, err := New(s.cfg, l, s.store, s.keys, s.alerts, s.clock)
+	var keys Keys = s.keys
+	if s.custody != nil {
+		keys = s.custody
+	}
+	w, err := New(s.cfg, l, s.store, keys, s.alerts, s.clock)
 	if err != nil {
 		s.t.Fatalf("New: %v", err)
 	}
@@ -216,7 +226,7 @@ func (s *stand) checkpoint(name, kind string, signed bool, mutate func(map[strin
 	rec := map[string]any{"v": 1, "kind": kind, "stream": name, "count": count, "head": head,
 		"prefix": "sha256:" + hex.EncodeToString(sum[:]), "at": s.now.UTC().Format("2006-01-02T15:04:05.000Z"), "prev": prev}
 	if signed {
-		rec["alg"], rec["kid"] = "ES256", s.kid
+		rec["alg"], rec["kid"] = "ES256", s.signKid
 	} else {
 		rec["unsigned_reason"] = "key_expired"
 	}
@@ -226,7 +236,7 @@ func (s *stand) checkpoint(name, kind string, signed bool, mutate func(map[strin
 	if signed {
 		in := canon(s.t, rec)
 		d := sha256.Sum256(in)
-		r, ss, err := ecdsa.Sign(rand.Reader, s.key, d[:])
+		r, ss, err := ecdsa.Sign(rand.Reader, s.signKey, d[:])
 		if err != nil {
 			s.t.Fatal(err)
 		}
@@ -668,5 +678,38 @@ func TestACheckpointFileRewrittenIsReported(t *testing.T) {
 	}
 	if got := s.tick(); len(got) != 0 {
 		t.Fatalf("one rewrite was reported again: %+v", got)
+	}
+}
+
+// A checkpoint is the producer's word about its own stream, so only the key
+// certified for that stream may sign it: another producer's key, or the
+// delegation service's working key, is certified and valid and still not this
+// stream's (CLAUDE.md invariant 32).
+func TestACheckpointSignedByAnotherProducersKeyIsInvalid(t *testing.T) {
+	s := newStand(t, nil)
+	s.emit("wardryx.ndjson", 3)
+	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
+	if got := s.tick(); len(got) != 0 {
+		t.Fatalf("control: the stream's own key: %+v", got)
+	}
+	other, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	okid, _ := delegation.Thumbprint(delegation.FromPublic(&other.PublicKey, ""))
+	opub, _ := other.PublicKey.Bytes()
+	s.keys.pub[okid], s.keys.name[okid] = opub, "vouchryx-token"
+	s.signKey, s.signKid = other, okid
+	s.emit("wardryx.ndjson", 1)
+	s.checkpoint("wardryx.ndjson", "checkpoint", true, nil)
+	got := types(s.tick())
+	f, ok := got["witness_checkpoint_invalid"]
+	if !ok || !strings.Contains(fmt.Sprint(f.Data["reason"]), "vouchryx-token") || f.Data["count"] != int64(4) {
+		t.Fatalf("a checkpoint signed by a key certified for another name: %+v", got)
+	}
+	// A stream no key is bound to: no signature is its producer's.
+	s.signKey, s.signKid = s.key, s.kid
+	s.emit("tokenfuse.ndjson", 2)
+	s.checkpoint("tokenfuse.ndjson", "checkpoint", true, nil)
+	got = types(s.tick())
+	if f, ok := got["witness_checkpoint_invalid"]; !ok || f.Data["stream"] != "tokenfuse.ndjson" || !strings.Contains(fmt.Sprint(f.Data["reason"]), "no key") {
+		t.Fatalf("a checkpoint for a stream no key is bound to: %+v", got)
 	}
 }
