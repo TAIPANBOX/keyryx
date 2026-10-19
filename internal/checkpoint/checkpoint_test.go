@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TAIPANBOX/agent-stack-go/event"
+	"github.com/TAIPANBOX/agent-stack-go/v2/event"
 )
 
 // A checkpoint is what a producer signs about its own stream. A verifier

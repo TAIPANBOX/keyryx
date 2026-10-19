@@ -39,7 +39,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/TAIPANBOX/agent-stack-go/delegation"
+	"github.com/TAIPANBOX/agent-stack-go/v2/delegation"
 	"github.com/TAIPANBOX/keyryx/internal/keystore"
 	"github.com/TAIPANBOX/keyryx/internal/policy"
 )
