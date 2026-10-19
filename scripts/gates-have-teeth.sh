@@ -153,6 +153,46 @@ fault "private keys: a comment outside the store names one" \
   internal/api/api.go 'type ctxKey struct{}' 'type ctxKey struct{} // never an ecdsa.PrivateKey' \
   pass ./scripts/private-keys-stay-in-the-store.sh
 
+# --- compat-surface ------------------------------------------------------
+fault "compat: a frozen route leaves the code" \
+  internal/api/api.go '{"GET", "/v1/state", "public"}' '{"GET", "/v1/states", "public"}' \
+  fail ./scripts/compat-surface.sh
+fault "compat: COMPATIBILITY.md drifts from the manifest" \
+  COMPATIBILITY.md '## Frozen' '## Frozen (edited by hand)' \
+  fail ./scripts/compat-surface.sh
+fault "compat: the manifest freezes nothing" \
+  compat/1.0.json '"frozen": {' '"frozen_removed": {' \
+  fail ./scripts/compat-surface.sh
+fault "compat: a comment on a route table changes, no name does" \
+  internal/api/api.go '// Routes is the route table: every route this service serves, and only those.' '// Routes is the route table: every route this service serves, and only those (see the README).' \
+  pass ./scripts/compat-surface.sh
+
+# --- svg-text-fit --------------------------------------------------------
+fault "svg text: a label outgrows its box" \
+  docs/architecture.svg '>Publishes key sets with an overlap<' '>Publishes key sets with an overlap and keeps every retired key<' \
+  fail ./scripts/svg-text-fit.sh
+fault "svg text: a label leaves every box" \
+  docs/delegation.svg 'y="277" font-family' 'y="2770" font-family' \
+  fail ./scripts/svg-text-fit.sh
+fault "svg text: a transform is not measured" \
+  docs/delegation.svg '<text x="480" y="277"' '<text transform="translate(0 0)" x="480" y="277"' \
+  fail ./scripts/svg-text-fit.sh
+fault "svg text: a face with no measured widths" \
+  docs/architecture.svg 'font-family="Helvetica, Arial, sans-serif" font-size="16" text-anchor="middle" fill="#1b1b1b">keyryx custody' 'font-family="Georgia" font-size="16" text-anchor="middle" fill="#1b1b1b">keyryx custody' \
+  fail ./scripts/svg-text-fit.sh
+fault "svg text: the root is not an SVG document" \
+  docs/delegation.svg 'xmlns="http://www.w3.org/2000/svg"' 'xmlns="http://example.com/svg"' \
+  fail ./scripts/svg-text-fit.sh
+fault "svg text: a label that gets shorter keeps passing" \
+  docs/architecture.svg '>approval tokens<' '>approvals<' \
+  pass ./scripts/svg-text-fit.sh
+if ./scripts/svg-text-fit.sh docs/no-diagrams-here >/dev/null 2>&1; then
+  echo "TOOTHLESS: svg text: a path with no diagram -> pass, wanted fail" >&2
+  exit 1
+fi
+cases=$((cases + 1))
+printf "ok  %-60s (%s)\n" "svg text: a path with no diagram measures nothing" "fail"
+
 # --- every gate in scripts/ has a case here --------------------------------
 uncovered=""
 for gate in scripts/*.sh; do

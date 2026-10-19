@@ -7,11 +7,20 @@ writers who saw the record when it was written.**
 
 [![CI](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-153-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-158-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/runtime%20dependencies-2-blue.svg)
 
+<img src="docs/architecture.svg" alt="keyryx architecture: four kinds of consumer that policy grants a key (approval tokens, record seal roots, the delegation token key and producers' checkpoint keys) reach keyryx custody, which signs on request, certifies delegated keys and publishes key sets with an overlap; a separate keyryx witness process reads the record read-only and keeps its own signed log; verifiers cache the published key sets and nothing calls keyryx on a request path" width="960">
+
 </div>
+
+keyryx holds the signing keys that the stack's approval, record-seal and
+delegation services sign with, and it certifies the short-lived keys that
+high-rate signers make for themselves. A second role, run as its own process,
+reads the record without writing to it, checks that every byte it saw is still
+there, and signs what it saw into a log of its own. Neither role is on a
+request path.
 
 Part of the TAIPANBOX agent-governance stack. Two roles in one binary, never in
 one process:
@@ -27,6 +36,25 @@ one process:
   side by side, so what it signed today still verifies after classical
   signatures are retired.
 
+## Where this fits in the stack
+
+keyryx sits beside the request path, not on it. Enforcement points and agents
+never call it per request. Verifiers cache the key sets it publishes and keep
+verifying when it is down, and the witness reads the record and never writes
+to it.
+
+```mermaid
+flowchart TB
+  WX["Wardryx: approval tokens"] -->|"signs on request"| KC
+  TR["Trailryx: record seal roots and manifests"] -->|"signs on request"| KC
+  VX["Vouchryx: delegation token key"] -->|"certifies its key"| KC
+  PR["Producers: stream checkpoint keys"] -->|"certifies their keys"| KC
+  KC["keyryx custody: holds keys, signs, publishes key sets"] -.->|"key sets, cached"| VER["Verifiers: enforcement points and auditors"]
+  KW["keyryx witness: reads the record, read-only"] -->|"reads streams and sealed manifests"| REC[("Event bus and trailryx records")]
+  KW -->|"asks for the statement of a checkpoint key"| KC
+  KW ==>|"signed log and findings"| AUD["Auditors: keyryx verify, offline"]
+```
+
 ## What it is not
 
 - **Not on any request path.** No enforcement point waits on it to decide
@@ -39,15 +67,37 @@ one process:
 
 ## Status
 
-**Both roles are built.** `keyryx custody` holds keys, signs on request for
-the consumers its policy grants a key, certifies the short-lived keys
-high-rate signers hold themselves, and publishes each key's set with an
-overlap. `keyryx witness` reads the bus, its checkpoints and trailryx's
-sealed manifests, says when anything it saw is no longer there, attests to
-each new trailryx store root, and keeps its own signed log. `keyryx verify`
-checks a witness log, or streams and their checkpoints, offline.
+- [x] Custody signs on request for the consumers a policy grants, and writes the
+  line for each signature to its use log before it answers
+- [x] Custody certifies a delegated key only after its consumer proves it holds
+  the key
+- [x] Key sets are published with an overlap, and a revoked key is never published
+- [x] The witness reads streams, checkpoints and trailryx sealed manifests
+  read-only, and reports rewrites, truncations and missing roots
+- [x] The witness keeps its own RFC 9162 log, with tree heads signed by ES384 and ML-DSA-65
+- [x] `keyryx verify` checks a witness log and its streams, offline
+- [x] Releases v0.1.0 (2026-10-18) and v0.1.1 (2026-10-19) are published as `ghcr.io/taipanbox/keyryx`
+- [ ] A consumer in another repository asks for and renews delegated keys (see NOT PROVEN)
+- [ ] trailryx attaches the witness attestations to its packs (see NOT PROVEN)
+- [ ] A cloud key management adapter (not planned: it is metered, and the operator decides)
 
-```bash
+The limits of each claim are in [NOT PROVEN](#not-proven).
+
+## Install
+
+Pull the published image, or build from source (Go 1.27 or later).
+
+```sh
+docker pull ghcr.io/taipanbox/keyryx:v0.1.1
+```
+
+The image is static and distroless, runs as uid 65532, and its entrypoint is
+the `keyryx` binary, so the role is its first argument: `custody` or `witness`.
+The variables and files are the ones in [Configuration](#configuration). The
+data directory must be writable by that uid, and the root key file readable by
+it alone.
+
+```sh
 go build -o keyryx ./cmd/keyryx
 ./keyryx version
 KEYRYX_DATA=/var/lib/keyryx KEYRYX_ROOT_KEY_FILE=/run/secrets/keyryx-root \
@@ -55,6 +105,55 @@ KEYRYX_DATA=/var/lib/keyryx KEYRYX_ROOT_KEY_FILE=/run/secrets/keyryx-root \
 KEYRYX_WITNESS_DATA=/var/lib/keyryx-witness KEYRYX_WITNESS_ROOT_KEY_FILE=/run/secrets/keyryx-witness-root \
   KEYRYX_WITNESS_EVENTS=/var/lib/agent-stack/events ./keyryx witness
 ```
+
+## Verify the image
+
+Check the build provenance of a release before running it:
+
+```sh
+gh attestation verify oci://ghcr.io/taipanbox/keyryx:v0.1.1 -R TAIPANBOX/keyryx
+```
+
+Each release carries a build-provenance attestation and an SBOM. v0.1.0 carries
+no cosign signature; v0.1.1 carries one, in the legacy cosign format. The
+keyless cosign check in [SECURITY.md](./SECURITY.md#verifying-a-build) has not
+been run against v0.1.1 (see NOT PROVEN). The measured results are in
+[VALIDATION.md](./VALIDATION.md).
+
+## Security
+
+The defaults protect the keys. Each one is a test or an invariant in
+[CLAUDE.md](./CLAUDE.md).
+
+- **A refusal starts nothing.** A missing or malformed variable, a root key file
+  that anyone but its owner can read, or a policy that does not parse each stops
+  the start with exit code 2 and names what is wrong. A refusal answers its
+  status only; the reason goes to the operator's log.
+- **Custody and the witness never share.** The witness refuses custody's data
+  directory, root key file and key. The launcher runs each role under its own
+  uid and volume; this repository can refuse a shared path or key, not choose a uid.
+- **No signature without its log line.** A signature or a key statement is
+  answered only after its line on the use log has reached the disk.
+- **A revoked key stays revoked.** It is never published and never signs, not
+  after a restart either.
+- **Stored records are authenticated.** Each key and statement record carries a
+  MAC. A record whose MAC does not hold is treated as revoked, is not used, and
+  raises an alarm.
+- **Each consumer authenticates one way.** A consumer has a socket, a key digest
+  compared in constant time, or a projected service-account token. Nothing
+  resolves to a default consumer.
+- **Admin routes are closed until configured.** Rotate and revoke refuse every
+  call (403) unless `KEYRYX_ADMIN_KEYS` names an admin key digest.
+- **No outbound call by default.** No time-stamping authority is called unless
+  `KEYRYX_WITNESS_TSA_URL` names one.
+- **No delegated private key is held.** Custody holds the public half of a
+  delegated key and never its private half.
+- **Pinned base images, non-root image.** The base images are pinned by digest,
+  and the image runs as uid 65532.
+
+To report a vulnerability, see [SECURITY.md](./SECURITY.md).
+
+## Custody
 
 ### What custody holds
 
@@ -117,6 +216,8 @@ certified:
 3. it sends `POST /v1/keys/{name}/delegate` with its public JWK, the
    challenge, that proof and the life it wants, from ten minutes to the name's
    `max_lifetime`.
+
+<img src="docs/delegation.svg" alt="Delegated keys in five steps: a consumer holds a key in memory, custody sends it a random challenge answered once, the consumer's proof is its key's signature over the challenge and the name, custody answers with a statement signed under both halves of the delegation root, and verifiers cache the key until its not_after" width="960">
 
 The answer is a **key statement**: a JWS in the General JSON Serialization,
 one payload and exactly two signatures, the ES384 and the ML-DSA-65 halves of
@@ -284,7 +385,7 @@ each what `GET /v1/statements/{kid}` answered.
 
 ## Testing
 
-153 tests. Tier T3: these are key and signature decisions where a wrong answer
+158 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
 mutation-tested.
 
@@ -299,6 +400,8 @@ staticcheck ./...
 ./scripts/no-owner-quotes.sh
 ./scripts/no-long-dashes.sh
 ./scripts/private-keys-stay-in-the-store.sh
+./scripts/compat-surface.sh
+./scripts/svg-text-fit.sh
 ./scripts/gates-have-teeth.sh    # needs a clean tree
 ```
 
@@ -306,6 +409,14 @@ staticcheck ./...
 
 Stated here rather than left to be discovered.
 
+- **No container started from the published image has been run here.** Its
+  pull, tags and build provenance were checked (see VALIDATION.md); a container
+  run with the variables above was not.
+- **The cosign signature of v0.1.1 has not been verified here.** It is in the
+  legacy cosign format, and cosign was not installed on the machine that
+  checked the release.
+- **The diagrams' text fit is measured against Helvetica's advance widths,** which
+  Arial matches by design. A browser's own glyph shaping is not measured.
 - **trailryx does not attach the attestations yet.** `trailryx-node` takes no
   witness input, so the attestations the witness writes are files beside its
   log until trailryx reads them into its packs; `trailryx-verify` would check
@@ -361,8 +472,6 @@ Stated here rather than left to be discovered.
   from its first line.** The witness of this version does not read it.
 - **No cloud key management.** The root key is a file. A KMS adapter would be
   metered, and it is the operator's decision, not a default.
-- **No image has been published.** The release workflow builds and signs one on
-  the first `v*` tag; until then there is nothing to pull.
 - **Independence from a host administrator** will not come from this service
   alone: on one machine the witness is a separate user and volume, not a
   separate trust domain. An off-host anchor (a public time-stamping authority,

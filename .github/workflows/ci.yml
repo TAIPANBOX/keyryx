@@ -52,6 +52,10 @@ jobs:
         run: ./scripts/no-long-dashes.sh --prove
       - name: private keys stay in the store
         run: ./scripts/private-keys-stay-in-the-store.sh
+      - name: the frozen surface is held in the code, and COMPATIBILITY.md is its rendering
+        run: ./scripts/compat-surface.sh
+      - name: every text in a diagram fits its box
+        run: ./scripts/svg-text-fit.sh
       - name: the gates have teeth
         run: ./scripts/gates-have-teeth.sh
 

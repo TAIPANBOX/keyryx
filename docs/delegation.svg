@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 320" width="960" height="320" role="img">
+  <defs>
+    <marker id="step" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f4e79"/>
+    </marker>
+  </defs>
+
+  <rect x="20" y="110" width="160" height="110" rx="6" fill="#f4f7fb" stroke="#1f4e79" stroke-width="1.5"/>
+  <text x="100" y="142" font-family="Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" fill="#1b1b1b">Consumer</text>
+  <text x="100" y="164" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">holds a key</text>
+  <text x="100" y="182" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">in memory only</text>
+
+  <rect x="210" y="110" width="160" height="110" rx="6" fill="#f4f7fb" stroke="#1f4e79" stroke-width="1.5"/>
+  <text x="290" y="142" font-family="Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" fill="#1b1b1b">Challenge</text>
+  <text x="290" y="164" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">random, for one name</text>
+  <text x="290" y="182" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">answered once</text>
+
+  <rect x="400" y="110" width="160" height="110" rx="6" fill="#f4f7fb" stroke="#1f4e79" stroke-width="1.5"/>
+  <text x="480" y="142" font-family="Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" fill="#1b1b1b">Proof</text>
+  <text x="480" y="164" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">the key signs the</text>
+  <text x="480" y="182" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">challenge and the name</text>
+
+  <rect x="590" y="110" width="160" height="110" rx="6" fill="#f4f7fb" stroke="#1f4e79" stroke-width="1.5"/>
+  <text x="670" y="142" font-family="Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" fill="#1b1b1b">Statement</text>
+  <text x="670" y="164" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">ES384 and ML-DSA-65</text>
+  <text x="670" y="182" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">both halves of the root</text>
+
+  <rect x="780" y="110" width="160" height="110" rx="6" fill="#f4f7fb" stroke="#1f4e79" stroke-width="1.5"/>
+  <text x="860" y="142" font-family="Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" fill="#1b1b1b">Verifiers</text>
+  <text x="860" y="164" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">cache the key set</text>
+  <text x="860" y="182" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">until not_after</text>
+
+  <line x1="182" y1="165" x2="208" y2="165" stroke="#1f4e79" stroke-width="1.5" marker-end="url(#step)"/>
+  <line x1="372" y1="165" x2="398" y2="165" stroke="#1f4e79" stroke-width="1.5" marker-end="url(#step)"/>
+  <line x1="562" y1="165" x2="588" y2="165" stroke="#1f4e79" stroke-width="1.5" marker-end="url(#step)"/>
+  <line x1="752" y1="165" x2="778" y2="165" stroke="#1f4e79" stroke-width="1.5" marker-end="url(#step)"/>
+
+  <rect x="20" y="250" width="920" height="44" rx="6" fill="#f7f7f7" stroke="#8a8a8a" stroke-width="1"/>
+  <text x="480" y="277" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">Custody never holds the delegated private key. The statement is checked under the pinned delegation root.</text>
+</svg>

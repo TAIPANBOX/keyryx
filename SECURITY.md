@@ -31,7 +31,8 @@ Every change passes the repository's gates before merge: `go build ./...`,
 `./scripts/features-are-bound.sh`, `./scripts/readme-numbers.sh`,
 `./scripts/base-images-pinned-by-digest.sh`,
 `./scripts/dependencies-are-argued.sh`, `./scripts/no-owner-quotes.sh`,
-`./scripts/no-long-dashes.sh`, `./scripts/gates-have-teeth.sh`,
+`./scripts/no-long-dashes.sh`, `./scripts/compat-surface.sh`,
+`./scripts/svg-text-fit.sh`, `./scripts/gates-have-teeth.sh`,
 `govulncheck ./...` and `gosec -quiet ./...`. A published image is signed by
 digest, keyless:
 
