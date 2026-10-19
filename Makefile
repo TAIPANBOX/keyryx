@@ -10,3 +10,5 @@ gates:
 	./scripts/no-owner-quotes.sh
 	./scripts/no-long-dashes.sh
 	./scripts/private-keys-stay-in-the-store.sh
+	./scripts/compat-surface.sh
+	./scripts/svg-text-fit.sh

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 452" width="960" height="452" role="img">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e6b3a"/>
+    </marker>
+  </defs>
+  <rect x="0" y="0" width="960" height="452" fill="none"/>
+
+  <rect x="32" y="70" width="250" height="60" rx="6" fill="#eef6ee" stroke="#2e6b3a" stroke-width="1.5"/>
+  <text x="157" y="96" font-family="Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" fill="#1b1b1b">wardryx</text>
+  <text x="157" y="116" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">approval tokens</text>
+
+  <rect x="32" y="150" width="250" height="60" rx="6" fill="#eef6ee" stroke="#2e6b3a" stroke-width="1.5"/>
+  <text x="157" y="176" font-family="Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" fill="#1b1b1b">trailryx</text>
+  <text x="157" y="196" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">record seal roots and manifests</text>
+
+  <rect x="32" y="230" width="250" height="60" rx="6" fill="#eef6ee" stroke="#2e6b3a" stroke-width="1.5"/>
+  <text x="157" y="256" font-family="Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" fill="#1b1b1b">vouchryx</text>
+  <text x="157" y="276" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">delegation token key</text>
+
+  <rect x="32" y="310" width="250" height="60" rx="6" fill="#eef6ee" stroke="#2e6b3a" stroke-width="1.5"/>
+  <text x="157" y="336" font-family="Helvetica, Arial, sans-serif" font-size="15" text-anchor="middle" fill="#1b1b1b">producers</text>
+  <text x="157" y="356" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">stream checkpoint keys</text>
+
+  <line x1="282" y1="100" x2="338" y2="100" stroke="#2e6b3a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="282" y1="180" x2="338" y2="180" stroke="#2e6b3a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="282" y1="260" x2="338" y2="260" stroke="#2e6b3a" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="282" y1="340" x2="338" y2="340" stroke="#2e6b3a" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <rect x="340" y="70" width="300" height="300" rx="8" fill="none" stroke="#1f4e79" stroke-width="1.5"/>
+  <text x="490" y="96" font-family="Helvetica, Arial, sans-serif" font-size="16" text-anchor="middle" fill="#1b1b1b">keyryx custody</text>
+  <rect x="356" y="112" width="268" height="64" rx="6" fill="#f4f7fb" stroke="#1f4e79" stroke-width="1"/>
+  <text x="490" y="140" font-family="Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" fill="#1b1b1b">Holds keys, signs on request</text>
+  <text x="490" y="160" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">for the consumers a policy grants</text>
+  <rect x="356" y="192" width="268" height="64" rx="6" fill="#f4f7fb" stroke="#1f4e79" stroke-width="1"/>
+  <text x="490" y="220" font-family="Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" fill="#1b1b1b">Certifies delegated keys</text>
+  <text x="490" y="240" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">by proof of possession</text>
+  <rect x="356" y="272" width="268" height="64" rx="6" fill="#f4f7fb" stroke="#1f4e79" stroke-width="1"/>
+  <text x="490" y="300" font-family="Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" fill="#1b1b1b">Publishes key sets with an overlap</text>
+  <text x="490" y="320" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">a revoked key is never published</text>
+
+  <rect x="700" y="70" width="228" height="300" rx="8" fill="none" stroke="#7a3e1d" stroke-width="1.5"/>
+  <text x="814" y="96" font-family="Helvetica, Arial, sans-serif" font-size="16" text-anchor="middle" fill="#1b1b1b">keyryx witness</text>
+  <rect x="716" y="112" width="196" height="64" rx="6" fill="#fbf5f0" stroke="#7a3e1d" stroke-width="1"/>
+  <text x="814" y="140" font-family="Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" fill="#1b1b1b">Reads the record</text>
+  <text x="814" y="160" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">read-only, never writes</text>
+  <rect x="716" y="192" width="196" height="64" rx="6" fill="#fbf5f0" stroke="#7a3e1d" stroke-width="1"/>
+  <text x="814" y="220" font-family="Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" fill="#1b1b1b">Checks every byte it saw</text>
+  <text x="814" y="240" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">rewrites and truncations</text>
+  <rect x="716" y="272" width="196" height="64" rx="6" fill="#fbf5f0" stroke="#7a3e1d" stroke-width="1"/>
+  <text x="814" y="300" font-family="Helvetica, Arial, sans-serif" font-size="14" text-anchor="middle" fill="#1b1b1b">Signs its own Merkle log</text>
+  <text x="814" y="320" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">tree heads, two signatures</text>
+
+  <rect x="32" y="396" width="896" height="44" rx="6" fill="#f7f7f7" stroke="#8a8a8a" stroke-width="1"/>
+  <text x="480" y="423" font-family="Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle" fill="#1b1b1b">Verifiers cache the key sets keyryx publishes and keep verifying when it is down. Nothing calls keyryx on a request path.</text>
+</svg>

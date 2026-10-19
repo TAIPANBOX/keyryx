@@ -355,6 +355,25 @@ docs or commit messages, as tooling for acting against anyone else.
     counts and clipped hashes, never record content. *(test:
     `TestEveryFindingIsAnAgentEventInKeyryxNdjson`)*
 
+38. **The surface the 1.0 will freeze is held now, in both directions.**
+    `compat/1.0.json` names the routes, the variables, the statement claims,
+    the subcommands and the witness findings. Each name is a literal in a file
+    its `where` entry names, `COMPATIBILITY.md` is the rendering of the
+    manifest, and each route kind equals its route table exactly. *(gate:
+    `scripts/compat-surface.sh`, teeth in `scripts/gates-have-teeth.sh`; test:
+    `TestTheFrozenRoutesAreTheRouteTables`)*
+
+39. **Every text in a diagram fits its box with at least six pixels to
+    spare.** The widths are Helvetica's, which Arial matches. A text no box
+    holds, a transform, a tspan, a face with no measured widths and a
+    non-ASCII character are refused, never skipped. *(gate:
+    `scripts/svg-text-fit.sh`, teeth in `scripts/gates-have-teeth.sh`)*
+
+40. **The README says what is published, and every image in it has alt text
+    and a file behind it.** *(tests: `TestTheReadmeStatesWhatIsPublished`,
+    `TestTheReadmeHasTheHouseSections`, `TestEveryImageInTheReadmeHasAltText`,
+    `TestTheHouseDocumentsExist`)*
+
 ## What must never be added without a conversation
 
 - **A route on any request path**: anything a door, a policy decision point or
@@ -399,6 +418,8 @@ go build ./...
 ./scripts/no-owner-quotes.sh
 ./scripts/no-long-dashes.sh
 ./scripts/private-keys-stay-in-the-store.sh
+./scripts/compat-surface.sh
+./scripts/svg-text-fit.sh
 ./scripts/gates-have-teeth.sh   # needs a clean tree; run it after committing
 ```
 

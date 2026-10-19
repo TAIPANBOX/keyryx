@@ -8,7 +8,7 @@
   ],
   "schema": "taipanbox.dev/components/v1",
   "repo": "TAIPANBOX/keyryx",
-  "distribution": "not distributed yet: no tag. ghcr.io/taipanbox/keyryx is published by .github/workflows/release.yml on the first v* tag push (linux/amd64 and linux/arm64, signed keyless with cosign, SBOM and build-provenance attestation attached)",
+  "distribution": "published as ghcr.io/taipanbox/keyryx: v0.1.0 (2026-10-18) and v0.1.1 (2026-10-19, the latest), by .github/workflows/release.yml on each v* tag push, for linux/amd64 and linux/arm64, with an SBOM and a build-provenance attestation attached. v0.1.1 carries a cosign signature in the legacy cosign format; v0.1.0 carries none",
   "components": [
     {
       "name": "keyryx",
