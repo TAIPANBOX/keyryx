@@ -300,6 +300,12 @@ Feature: An independent witness of the record
     When the attestation and its directories are read
     Then the attestation is mode 0640, its directories are 0750, and no key or log the witness keeps changes mode
 
+  # @test:TestAFailedModeChangeWritesNoAttestation
+  Scenario: A refused mode change files no attestation
+    Given a trailryx store root the witness is about to attest, and a mode change the system refuses
+    When the witness reads
+    Then the read fails, nothing is filed under the root's name, and no temporary file is left behind
+
   # @test:TestAMissingRootIsReported
   Scenario: A record that does not keep up is reported
     Given streams grown past a seal's worth with no new root for two seal intervals
