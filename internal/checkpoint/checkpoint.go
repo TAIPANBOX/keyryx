@@ -23,7 +23,7 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/TAIPANBOX/agent-stack-go/event"
+	"github.com/TAIPANBOX/agent-stack-go/v2/event"
 	"github.com/gowebpki/jcs"
 
 	"github.com/TAIPANBOX/keyryx/internal/keystore"
