@@ -76,7 +76,7 @@ flowchart TB
   read-only, and reports rewrites, truncations and missing roots
 - [x] The witness keeps its own RFC 9162 log, with tree heads signed by ES384 and ML-DSA-65
 - [x] `keyryx verify` checks a witness log and its streams, offline
-- [x] Releases v0.1.0 (2026-10-18) and v0.1.1 (2026-10-19) are published as `ghcr.io/taipanbox/keyryx`
+- [x] Releases v0.1.0 (2026-10-18) and v0.1.1 (2026-10-19) are published as `ghcr.io/taipanbox/keyryx:v0.1.0` and `ghcr.io/taipanbox/keyryx:v0.1.1`
 - [ ] A consumer in another repository asks for and renews delegated keys (see NOT PROVEN)
 - [ ] trailryx attaches the witness attestations to its packs (see NOT PROVEN)
 - [ ] A cloud key management adapter (not planned: it is metered, and the operator decides)
