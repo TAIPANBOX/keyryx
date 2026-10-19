@@ -374,6 +374,16 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestTheReadmeHasTheHouseSections`, `TestEveryImageInTheReadmeHasAltText`,
     `TestTheHouseDocumentsExist`)*
 
+41. **An attestation is readable by the record plane's group and by no one else,
+    and nothing else the witness keeps changes mode.** The witness sets each
+    attestation to mode 0640 and its directories to 0750, explicitly rather than
+    through the umask, so a reader in the witness's group opens it. An
+    attestation is a public statement (a signature over trailryx's witness
+    statement, with its public key) and carries no secret; keys and the witness's
+    log keep their modes. A refused mode change fails the attestation and files
+    nothing. *(test: `TestAnAttestationIsGroupReadableAndItsDirectoriesToo`; the
+    refusal half is `TestAFailedModeChangeWritesNoAttestation`)*
+
 ## What must never be added without a conversation
 
 - **A route on any request path**: anything a door, a policy decision point or

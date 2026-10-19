@@ -294,6 +294,12 @@ Feature: An independent witness of the record
     When the witness reads each time
     Then each new root gets an attestation trailryx-verify would check, and each rewrite or removal is a high finding
 
+  # @test:TestAnAttestationIsGroupReadableAndItsDirectoriesToo
+  Scenario: An attestation is readable by the record plane's group and by no one else
+    Given a trailryx store root the witness has attested, in a tenant directory that was made stricter first
+    When the attestation and its directories are read
+    Then the attestation is mode 0640, its directories are 0750, and no key or log the witness keeps changes mode
+
   # @test:TestAMissingRootIsReported
   Scenario: A record that does not keep up is reported
     Given streams grown past a seal's worth with no new root for two seal intervals
