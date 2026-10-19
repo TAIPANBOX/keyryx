@@ -2,7 +2,7 @@
   "schema": "taipanbox.dev/compat/v1",
   "repo": "TAIPANBOX/keyryx",
   "major": 0,
-  "status": "pre-1.0 (latest tag v0.1.1): no tag has frozen this surface yet. The surface below is what 1.0 will freeze, and scripts/compat-surface.sh holds it on every push, so the 1.0 tag freezes something the gate has already held. TestTheFrozenRoutesAreTheRouteTables holds the two route kinds against the route tables in both directions.",
+  "status": "pre-1.0 (latest tag v0.1.2): no tag has frozen this surface yet. The surface below is what 1.0 will freeze, and scripts/compat-surface.sh holds it on every push, so the 1.0 tag freezes something the gate has already held. TestTheFrozenRoutesAreTheRouteTables holds the two route kinds against the route tables in both directions.",
   "frozen": {
     "http.custody.routes": [
       "/healthz",
