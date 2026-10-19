@@ -737,6 +737,11 @@ func (w *Witness) root(t *tick, tn Tenant, total int64) error {
 
 var errRotated = errors.New("witness: the witness key rotated while signing")
 
+// setMode sets an attestation's mode and its directories' explicitly, so the
+// umask cannot change it. A test swaps it to see a refused mode change fail the
+// attestation; nothing else replaces it.
+var setMode = os.Chmod
+
 // attest signs trailryx-sign's witness statement for a new store root with the
 // witness key's ES384 half, the one trailryx-verify checks.
 func (w *Witness) attest(tn Tenant, store trailryx.Store, now time.Time) error {
@@ -768,6 +773,17 @@ func (w *Witness) attest(tn Tenant, store trailryx.Store, now time.Time) error {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return err
 	}
+	// The modes are set, not left to the umask, so a reader in the witness's
+	// group (the record plane, another uid) can open the file and its
+	// directories. An attestation is a public statement: a signature over
+	// trailryx's witness statement and the public key, no secret. Keys and the
+	// witness's own log keep their modes.
+	if err := setMode(w.cfg.Attestations, 0o750); err != nil {
+		return err
+	}
+	if err := setMode(dir, 0o750); err != nil {
+		return err
+	}
 	tmp, err := os.CreateTemp(dir, ".tmp-")
 	if err != nil {
 		return err
@@ -782,6 +798,9 @@ func (w *Witness) attest(tn Tenant, store trailryx.Store, now time.Time) error {
 		return err
 	}
 	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := setMode(tmp.Name(), 0o640); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), filepath.Join(dir, a.StoreRoot+".json"))

@@ -7,7 +7,7 @@ writers who saw the record when it was written.**
 
 [![CI](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-158-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-163-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/runtime%20dependencies-2-blue.svg)
 
@@ -78,7 +78,7 @@ flowchart TB
 - [x] `keyryx verify` checks a witness log and its streams, offline
 - [x] Releases v0.1.0 (2026-10-18) and v0.1.1 (2026-10-19) are published as `ghcr.io/taipanbox/keyryx:v0.1.0` and `ghcr.io/taipanbox/keyryx:v0.1.1`
 - [ ] A consumer in another repository asks for and renews delegated keys (see NOT PROVEN)
-- [ ] trailryx attaches the witness attestations to its packs (see NOT PROVEN)
+- [ ] A pack built from a real witness run carries the witness's attestation (see NOT PROVEN)
 - [ ] A cloud key management adapter (not planned: it is metered, and the operator decides)
 
 The limits of each claim are in [NOT PROVEN](#not-proven).
@@ -324,7 +324,11 @@ Every `KEYRYX_WITNESS_INTERVAL` it reads, read-only:
 - **every trailryx data directory** in `KEYRYX_WITNESS_RECORDS`. It computes
   the store root as trailryx-verify does and attests to each new one in
   trailryx-sign's `witness_statement` bytes with its ES384 half, written to
-  `KEYRYX_WITNESS_DATA/attestations/<tenant>/<root>.json`. A sealed manifest
+  `KEYRYX_WITNESS_DATA/attestations/<tenant>/<root>.json`, mode 0640 in
+  directories of mode 0750 (from v0.1.2), so a reader in the witness's group can
+  open them. The data directory stays 0700, which the witness requires, so a
+  reader that is another account must share the witness's group and be given
+  the `attestations` directory itself, not the data directory. A sealed manifest
   rewritten or gone is `witness_root_equivocated`; a record that grew past a
   seal's worth with no new root for two seal intervals is `witness_root_missing`.
 
@@ -385,7 +389,7 @@ each what `GET /v1/statements/{kid}` answered.
 
 ## Testing
 
-158 tests. Tier T3: these are key and signature decisions where a wrong answer
+160 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
 mutation-tested.
 
@@ -417,10 +421,7 @@ Stated here rather than left to be discovered.
   checked the release.
 - **The diagrams' text fit is measured against Helvetica's advance widths,** which
   Arial matches by design. A browser's own glyph shaping is not measured.
-- **trailryx does not attach the attestations yet.** `trailryx-node` takes no
-  witness input, so the attestations the witness writes are files beside its
-  log until trailryx reads them into its packs; `trailryx-verify` would check
-  them as it checks any witness, which this repository has not run.
+- **trailryx reads the attestations from its 1.3.0 release on, and no pack built from a real witness run has been checked here.** With `TRAILRYX_WITNESS_ATTESTATIONS` naming the witness's `attestations` directory, `trailryx-node read --pack` attaches each file filed for the root and tenant it packs, and `trailryx-verify` checks it as it checks any witness; this repository has not run that check. Files written before v0.1.2 are mode 0600 and fail that read for any other account. The witness writes each root's attestation once and does not rewrite earlier ones, so those files keep their mode until they are changed by hand.
 - **The store root is trailryx's construction rebuilt by hand.** It is
   checked against trailryx's source at 92dd4b6 by a reference written
   separately in the tests, not against a store trailryx itself sealed: no

@@ -550,6 +550,94 @@ func checkAttestation(t *testing.T, s *stand, st trailryx.Store) {
 	}
 }
 
+// TestAnAttestationIsGroupReadableAndItsDirectoriesToo pins the modes the record
+// plane depends on: a reader in the witness's group opens an attestation, and no
+// key or log the witness keeps changes mode. The tenant directory is made stricter
+// first, as an earlier run could leave it, so the directory check does not pass on
+// the umask alone.
+func TestAnAttestationIsGroupReadableAndItsDirectoriesToo(t *testing.T) {
+	s := newStand(t, nil)
+	tenant := filepath.Join(s.attest, "acme")
+	if err := os.Mkdir(tenant, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keep := []string{s.keysDir, s.wdata}
+	before := make([]os.FileMode, len(keep))
+	for i, p := range keep {
+		before[i] = modeOf(t, p)
+	}
+	writeManifest(t, s.records, 0, 1, nil)
+	writeManifest(t, s.records, 0, 2, nil)
+	if got := s.tick(); len(got) != 0 {
+		t.Fatalf("an honest store raised %+v", got)
+	}
+	st, _ := trailryx.ReadStore(s.records)
+	if got := modeOf(t, filepath.Join(tenant, hex.EncodeToString(st.Root[:])+".json")); got != 0o640 {
+		t.Errorf("an attestation is mode %o, want 0640", got)
+	}
+	if got := modeOf(t, tenant); got != 0o750 {
+		t.Errorf("the tenant directory is mode %o, want 0750", got)
+	}
+	if got := modeOf(t, s.attest); got != 0o750 {
+		t.Errorf("the attestations directory is mode %o, want 0750", got)
+	}
+	for i, p := range keep {
+		if got := modeOf(t, p); got != before[i] {
+			t.Errorf("%s changed mode from %o to %o", p, before[i], got)
+		}
+	}
+}
+
+// modeOf is the permission bits of path; a missing path fails the test.
+func modeOf(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Mode().Perm()
+}
+
+// TestAFailedModeChangeWritesNoAttestation: an attestation whose mode cannot be
+// set is not filed. A file left at the wrong mode would be unreadable to the
+// record plane, and a half-made file is worse than none; the tick reports the
+// refusal and leaves nothing behind, whichever of the three mode changes refuses.
+func TestAFailedModeChangeWritesNoAttestation(t *testing.T) {
+	for _, refused := range []string{"the attestations directory", "the tenant directory", "the attestation file"} {
+		t.Run(refused, func(t *testing.T) {
+			s := newStand(t, nil)
+			writeManifest(t, s.records, 0, 1, nil)
+			writeManifest(t, s.records, 0, 2, nil)
+			tenant := filepath.Join(s.attest, "acme")
+			keep := setMode
+			t.Cleanup(func() { setMode = keep })
+			setMode = func(name string, mode os.FileMode) error {
+				if (refused == "the attestations directory" && name == s.attest) ||
+					(refused == "the tenant directory" && name == tenant) ||
+					(refused == "the attestation file" && mode == 0o640) {
+					return errors.New("mode refused")
+				}
+				return keep(name, mode)
+			}
+			s.now = s.now.Add(time.Minute)
+			if _, err := s.w.Tick(); err == nil {
+				t.Fatalf("a refused mode change on %s did not fail the tick", refused)
+			}
+			st, _ := trailryx.ReadStore(s.records)
+			if _, err := os.Stat(filepath.Join(tenant, hex.EncodeToString(st.Root[:])+".json")); !os.IsNotExist(err) {
+				t.Errorf("an attestation was filed although %s refused its mode: %v", refused, err)
+			}
+			entries, err := os.ReadDir(tenant)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Errorf("a refused mode on %s left %d file(s) in the tenant directory", refused, len(entries))
+			}
+		})
+	}
+}
+
 func TestAMissingRootIsReported(t *testing.T) {
 	s := newStand(t, func(c *Config) { c.SealLines = 5; c.SealEvery = time.Minute })
 	writeManifest(t, s.records, 0, 1, nil)
