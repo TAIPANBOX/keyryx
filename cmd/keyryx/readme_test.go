@@ -48,8 +48,8 @@ func TestTheReadmeStatesWhatIsPublished(t *testing.T) {
 	if strings.Contains(readme, "No image has been published") {
 		t.Error("README says no image has been published; the registry holds published tags")
 	}
-	if !strings.Contains(readme, "ghcr.io/taipanbox/keyryx:v0.1.1") {
-		t.Error("README does not name the latest published image, ghcr.io/taipanbox/keyryx:v0.1.1")
+	if !strings.Contains(readme, "ghcr.io/taipanbox/keyryx:v0.1.2") {
+		t.Error("README does not name the latest published image, ghcr.io/taipanbox/keyryx:v0.1.2")
 	}
 	var comp struct {
 		Distribution string `json:"distribution"`
@@ -57,7 +57,7 @@ func TestTheReadmeStatesWhatIsPublished(t *testing.T) {
 	if err := json.Unmarshal([]byte(repoFile(t, "components.json")), &comp); err != nil {
 		t.Fatalf("components.json: %v", err)
 	}
-	if strings.Contains(comp.Distribution, "not distributed yet") || !strings.Contains(comp.Distribution, "v0.1.1") {
+	if strings.Contains(comp.Distribution, "not distributed yet") || !strings.Contains(comp.Distribution, "v0.1.2") {
 		t.Errorf("components.json says distribution %q", comp.Distribution)
 	}
 }
