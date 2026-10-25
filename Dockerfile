@@ -4,12 +4,13 @@
 # distroless static and what makes cross-compiling to arm64 free. The base
 # images are pinned by digest, not by tag: a tag can move under an operator
 # without anyone choosing that, a digest cannot (gate:
-# scripts/base-images-pinned-by-digest.sh). The digests are the ones the
-# sibling Go services of this stack already build on.
+# scripts/base-images-pinned-by-digest.sh). The build stage is the golang:1.27.3
+# index (Go 1.27.3 fixes GO-2026-6809 in crypto/x509); the runtime is the one
+# the sibling Go services of this stack already run on.
 #
 # NEEDS BUILDKIT for $BUILDPLATFORM (the default in Docker 23 and later).
 
-FROM --platform=$BUILDPLATFORM golang@sha256:5bc7f572bbaa98885a3a1fd9c0aa76b59e3e14e8628bfc316bbfd0c701e4818c AS build
+FROM --platform=$BUILDPLATFORM golang@sha256:f20d83a83e18dbd2a4714b8ffd4b30b287b6243962dd75608e86abcc63ba4efc AS build
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
 COPY go.mod go.su[m] ./
