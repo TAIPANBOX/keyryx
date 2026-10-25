@@ -77,7 +77,7 @@ flowchart TB
 - [x] The witness keeps its own RFC 9162 log, with tree heads signed by ES384 and ML-DSA-65
 - [x] `keyryx verify` checks a witness log and its streams, offline
 - [x] Releases v0.1.0 (2026-10-18), v0.1.1 (2026-10-19) and v0.1.2 (2026-10-19) are published as `ghcr.io/taipanbox/keyryx:v0.1.0`, `ghcr.io/taipanbox/keyryx:v0.1.1` and `ghcr.io/taipanbox/keyryx:v0.1.2`
-- [ ] A consumer in another repository asks for and renews delegated keys (see NOT PROVEN)
+- [x] A consumer in another repository asks for and renews delegated keys: vouchryx v0.5.0 and later, with `VOUCHRYX_SIGNER=keyryx` (see NOT PROVEN)
 - [ ] A pack built from a real witness run carries the witness's attestation (see NOT PROVEN)
 - [ ] A cloud key management adapter (not planned: it is metered, and the operator decides)
 
@@ -445,11 +445,14 @@ Stated here rather than left to be discovered.
   pins the new set, and no rotation has been run against a witness here.
 - **The witness reads the bus and the record, not custody's use log**, and
   custody writes no `key_rotated` or `key_revoked` event yet.
-- **Nothing consumes a key statement yet.** The delegation service, the
-  producers' checkpoint writers and the shared key client that would ask for
-  and renew delegated keys are later pull requests in their own repositories;
-  the round trip with the estate's shared verifier is tested here, not run by
-  a consumer.
+- **One consumer asks for delegated keys, and it is not run here.** vouchryx
+  v0.5.0 and later, with `VOUCHRYX_SIGNER=keyryx`, has its working key
+  certified and renewed here through agent-stack-go's `keyclient`, and from
+  v0.6.0 checks each key statement against a pinned delegation root before the
+  key signs. Its tests use a fake custody, and its release notes record one
+  live run against a keyryx binary; no run of the pair is recorded in this
+  repository. The producers' checkpoint writers are later pull requests in
+  their own repositories.
 - **An earlier record can be put back.** The state MAC proves custody wrote a
   state, not that it is the latest one: whoever can write the data directory
   can restore a copy of a record from before its revocation, and that copy's
@@ -478,9 +481,11 @@ Stated here rather than left to be discovered.
   separate trust domain. An off-host anchor (a public time-stamping authority,
   built here and off by default, or a second witness on another machine, not
   built) is what closes that, and it is the operator's to switch on.
-- **Post-quantum signatures** are produced with Go 1.27's `crypto/mldsa`; no
-  verifier outside this repository checks ML-DSA yet, and the key set's AKP
-  form follows a JOSE draft, not a published RFC.
+- **Post-quantum signatures** are produced with Go 1.27's `crypto/mldsa`.
+  Outside this repository, vouchryx v0.6.0 and later checks the ML-DSA-65 half
+  of a key statement, while agent-stack-go's shared verifier checks the
+  classical half only. The key set's AKP form follows a JOSE draft, not a
+  published RFC.
 
 ## Licence
 
