@@ -76,7 +76,7 @@ flowchart TB
   read-only, and reports rewrites, truncations and missing roots
 - [x] The witness keeps its own RFC 9162 log, with tree heads signed by ES384 and ML-DSA-65
 - [x] `keyryx verify` checks a witness log and its streams, offline
-- [x] Releases v0.1.0 (2026-10-18), v0.1.1 (2026-10-19) and v0.1.2 (2026-10-19) are published as `ghcr.io/taipanbox/keyryx:v0.1.0`, `ghcr.io/taipanbox/keyryx:v0.1.1` and `ghcr.io/taipanbox/keyryx:v0.1.2`
+- [x] Releases v0.1.0 (2026-10-18), v0.1.1 (2026-10-19), v0.1.2 (2026-10-19) and v0.1.3 (2026-10-26) are published as `ghcr.io/taipanbox/keyryx:v0.1.0`, `ghcr.io/taipanbox/keyryx:v0.1.1`, `ghcr.io/taipanbox/keyryx:v0.1.2` and `ghcr.io/taipanbox/keyryx:v0.1.3`
 - [x] A consumer in another repository asks for and renews delegated keys: vouchryx v0.5.0 and later, with `VOUCHRYX_SIGNER=keyryx` (see NOT PROVEN)
 - [ ] A pack built from a real witness run carries the witness's attestation (see NOT PROVEN)
 - [ ] A cloud key management adapter (not planned: it is metered, and the operator decides)
@@ -88,7 +88,7 @@ The limits of each claim are in [NOT PROVEN](#not-proven).
 Pull the published image, or build from source (Go 1.27 or later).
 
 ```sh
-docker pull ghcr.io/taipanbox/keyryx:v0.1.2
+docker pull ghcr.io/taipanbox/keyryx:v0.1.3
 ```
 
 The image is static and distroless, runs as uid 65532, and its entrypoint is
@@ -111,13 +111,13 @@ KEYRYX_WITNESS_DATA=/var/lib/keyryx-witness KEYRYX_WITNESS_ROOT_KEY_FILE=/run/se
 Check the build provenance of a release before running it:
 
 ```sh
-gh attestation verify oci://ghcr.io/taipanbox/keyryx:v0.1.2 -R TAIPANBOX/keyryx
+gh attestation verify oci://ghcr.io/taipanbox/keyryx:v0.1.3 -R TAIPANBOX/keyryx
 ```
 
 Each release carries a build-provenance attestation and an SBOM. v0.1.0 carries
-no cosign signature; v0.1.1 and v0.1.2 carry one, in the legacy cosign format. The
+no cosign signature; v0.1.1, v0.1.2 and v0.1.3 carry one, in the legacy cosign format. The
 keyless cosign check in [SECURITY.md](./SECURITY.md#verifying-a-build) has not
-been run against v0.1.1 or v0.1.2 (see NOT PROVEN). The measured results are in
+been run against v0.1.1, v0.1.2 or v0.1.3 (see NOT PROVEN). The measured results are in
 [VALIDATION.md](./VALIDATION.md).
 
 ## Security
@@ -416,7 +416,7 @@ Stated here rather than left to be discovered.
 - **No container started from the published image has been run here.** Its
   pull, tags and build provenance were checked (see VALIDATION.md); a container
   run with the variables above was not.
-- **The cosign signatures of v0.1.1 and v0.1.2 have not been verified here.** They are in the
+- **The cosign signatures of v0.1.1, v0.1.2 and v0.1.3 have not been verified here.** They are in the
   legacy cosign format, and cosign was not installed on the machine that
   checked the release.
 - **The diagrams' text fit is measured against Helvetica's advance widths,** which
