@@ -2,7 +2,7 @@
 
 `TAIPANBOX/keyryx` promises the surface below from its 1.0 (`compat/1.0.json`, held by `scripts/compat-surface.sh` on every push). A frozen name is not removed or renamed within a major; an additive thing may appear as a minor; an experimental thing may change in any release.
 
-Status: pre-1.0 (latest tag v0.1.2): no tag has frozen this surface yet. The surface below is what 1.0 will freeze, and scripts/compat-surface.sh holds it on every push, so the 1.0 tag freezes something the gate has already held. TestTheFrozenRoutesAreTheRouteTables holds the two route kinds against the route tables in both directions.
+Status: pre-1.0 (latest tag v0.1.3): no tag has frozen this surface yet. The surface below is what 1.0 will freeze, and scripts/compat-surface.sh holds it on every push, so the 1.0 tag freezes something the gate has already held. TestTheFrozenRoutesAreTheRouteTables holds the two route kinds against the route tables in both directions.
 
 ## Frozen
 
