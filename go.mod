@@ -6,5 +6,5 @@ toolchain go1.27.3
 
 require (
 	github.com/TAIPANBOX/agent-stack-go/v2 v2.0.1
-	github.com/gowebpki/jcs v1.0.1
+	github.com/gowebpki/jcs v1.0.2
 )
