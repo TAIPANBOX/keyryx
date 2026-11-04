@@ -445,13 +445,18 @@ Stated here rather than left to be discovered.
   pins the new set, and no rotation has been run against a witness here.
 - **The witness reads the bus and the record, not custody's use log**, and
   custody writes no `key_rotated` or `key_revoked` event yet.
-- **One consumer asks for delegated keys, and it is not run here.** vouchryx
+- **Two consumers ask for keys, and neither pair is run here.** vouchryx
   v0.5.0 and later, with `VOUCHRYX_SIGNER=keyryx`, has its working key
   certified and renewed here through agent-stack-go's `keyclient`, and from
   v0.6.0 checks each key statement against a pinned delegation root before the
   key signs. Its tests use a fake custody, and its release notes record one
   live run against a keyryx binary; no run of the pair is recorded in this
-  repository. The producers' checkpoint writers are later pull requests in
+  repository. TokenFuse v1.18.0 and later has its gateway and its MCP broker
+  certify their stream checkpoint keys here (`TOKENFUSE_CHECKPOINTS_DIR` with
+  the `TOKENFUSE_CHECKPOINT_KEYRYX_*` variables) and has its Cloud's audit
+  manifest signed by a held key (`TOKENFUSE_CLOUD_AUDIT_SIGNER=keyryx`), from
+  its v1.18.0 release notes; this repository records no run of that pair
+  either. The Go producers' checkpoint writers are later pull requests in
   their own repositories.
 - **An earlier record can be put back.** The state MAC proves custody wrote a
   state, not that it is the latest one: whoever can write the data directory
