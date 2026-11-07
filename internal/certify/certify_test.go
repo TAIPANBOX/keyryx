@@ -117,6 +117,8 @@ func record(st statement.Statement, raw []byte) error {
 	return nil
 }
 
+func recordRetired(statement.Statement) error { return nil }
+
 // certify runs the honest flow: a challenge, a proof over it, a statement.
 func (s *stand) certify(h holder, consumer, name string, life time.Duration) (statement.Statement, []byte, error) {
 	s.t.Helper()
@@ -124,7 +126,7 @@ func (s *stand) certify(h holder, consumer, name string, life time.Duration) (st
 	if err != nil {
 		return statement.Statement{}, nil, err
 	}
-	return s.reg.Delegate(consumer, name, Request{JWK: h.jwk, Challenge: c, Proof: h.prove(s.t, name, consumer, c), Lifetime: life}, record)
+	return s.reg.Delegate(consumer, name, Request{JWK: h.jwk, Challenge: c, Proof: h.prove(s.t, name, consumer, c), Lifetime: life}, record, recordRetired)
 }
 
 func (s *stand) published(name string) map[string]bool {
@@ -145,7 +147,7 @@ func TestAKeyIsCertifiedOnlyWithAProofOfPossession(t *testing.T) {
 	logged = nil
 	try := func(what string, consumer, asName string, req Request) {
 		t.Helper()
-		if _, _, err := s.reg.Delegate(consumer, asName, req, record); err == nil {
+		if _, _, err := s.reg.Delegate(consumer, asName, req, record, recordRetired); err == nil {
 			t.Errorf("%s: a statement was issued", what)
 		}
 	}
@@ -477,7 +479,7 @@ func TestACertifiedKeyIsNeverHeld(t *testing.T) {
 	j["d"] = base64.RawURLEncoding.EncodeToString(rawPrivate(t, leaky.key))
 	withD, _ := json.Marshal(j)
 	c, _, _ := s.reg.Challenge("vouchryx", "vouchryx-token")
-	if _, _, err := s.reg.Delegate("vouchryx", "vouchryx-token", Request{JWK: withD, Challenge: c, Proof: leaky.prove(t, "vouchryx-token", "vouchryx", c), Lifetime: time.Hour}, record); err == nil {
+	if _, _, err := s.reg.Delegate("vouchryx", "vouchryx-token", Request{JWK: withD, Challenge: c, Proof: leaky.prove(t, "vouchryx-token", "vouchryx", c), Lifetime: time.Hour}, record, recordRetired); err == nil {
 		t.Fatal("a key offered with its private member was certified")
 	}
 	keys = append(keys, leaky)

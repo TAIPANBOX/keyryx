@@ -223,7 +223,8 @@ docs or commit messages, as tooling for acting against anyone else.
     minutes to the name's `max_lifetime`; valid from `not_before` up to
     `not_after`; published until `not_after` plus the name's overlap and not
     after; a renewal asked while another key is valid a publish-ahead time from
-    now starts that time later; at most four live keys per name. *(tests:
+    now starts that time later; at most four live keys per name, and a key may
+    leave before its end only as invariant 42 says. *(tests:
     `TestNotAfterIsHonoured`, `TestTheOverlapKeepsAnExpiredKeyPublishedForItsWindow`,
     `TestARenewalIsPublishedBeforeItSigns`, `TestTheLiveKeysOfANameAreCapped`)*
 
@@ -383,6 +384,46 @@ docs or commit messages, as tooling for acting against anyone else.
     log keep their modes. A refused mode change fails the attestation and files
     nothing. *(test: `TestAnAttestationIsGroupReadableAndItsDirectoriesToo`; the
     refusal half is `TestAFailedModeChangeWritesNoAttestation`)*
+
+42. **At the bound a new key retires its owner's oldest, and only once no token
+    the old key signed can still be alive.** `@decided 2026-11-07`: a restart of
+    a consumer may not cost a slot for a key's whole life, the private half stays
+    in memory, and the bound on published keys holds. A consumer signs with the
+    newest key that has begun (keyclient's `validLocked`, tokenfuse's `key_at`), so
+    the oldest key signed nothing after the next key's `not_before`, and the name's
+    overlap is how long a token lives. So the oldest leaves when the next key has
+    been signing for the overlap, and until then the new key is refused as it
+    always was at the bound. `@claude 2026-11-07`: the rest is this repository's
+    reading, open to reversal. It takes an overlap at least as long as the longest
+    token, as the end of a key's life already does, and one signing process per
+    owner of a name: keys of several live processes of one owner would be retired
+    while in use, and both launchers run one.
+
+    Only a key of the same owner goes, and an owner with one live key loses
+    nothing. A retired key leaves the set and is not a revoked one: nothing says
+    it was stolen, its statement stands, and what it signed in its life still
+    verifies at the witness, which reads `revoked_at` and would refuse a record
+    seen after it. An admin can still revoke it. The retirement is a line on the
+    use log before it happens (invariant 18) and a record of its own under
+    `retired/`, under the state MAC of invariant 30 with its own kind; a record
+    that does not hold is a revocation and an alarm, and a file custody cannot have
+    written refuses the start. It is its own file so that no statement record
+    changes form: an older release opened on the directory after a rollback reads
+    every statement it knows and is back to refusing at the bound. The old key
+    leaves on disk before the new one arrives, so a death between the two writes
+    leaves one key fewer, never one more than the bound. What the MAC does not stop
+    is the file being deleted, which is invariant 30's limit: it puts back a key
+    whose private half died with its process.
+    *(tests: `TestAStartPastTheCapRetiresTheOldestKeyOfItsOwner`,
+    `TestEveryStartPastTheCapGetsAKey`, `TestTheOldestKeyStaysWhileATokenItSignedCouldStillLive`,
+    `TestAKeyOfAnotherOwnerIsNeverRetired`, `TestNoScheduleOfStartsBreaksTheBoundOrCutsALiveToken`,
+    `TestTheOldestKeyIsStillTheOldestAfterARestartOfCustody`, `TestARetiredKeyIsNotARevokedKey`,
+    `TestACheckpointSignedBeforeItsKeyRetiredStillVerifiesAtTheWitness`,
+    `TestARetirementSurvivesARestartOfCustody`, `TestAnEditedRetirementIsTreatedAsRevokedAndRaisesAnAlarm`,
+    `TestAFileCustodyNeverWroteInTheRetiredDirectoryRefusesTheStart`,
+    `TestRevokingAnAlarmedRetirementAcknowledgesIt`, `TestNoKeyIsRetiredWhenItsLineCouldNotBeLogged`,
+    `TestAKeyLeavesOnDiskBeforeItsReplacementArrives`,
+    `TestARetirementIsOnTheUseLogAndTheInventoryNamesIt`; the live run: `labs/five-starts`)*
 
 ## What must never be added without a conversation
 

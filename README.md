@@ -7,7 +7,7 @@ writers who saw the record when it was written.**
 
 [![CI](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-163-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-178-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/runtime%20dependencies-2-blue.svg)
 
@@ -190,7 +190,7 @@ To report a vulnerability, see [SECURITY.md](./SECURITY.md).
 | `GET /healthz` | anyone | liveness |
 | `GET /v1/state` | anyone | the role, the version, each key's active and next key id, and `alarms`: every state on disk custody could not vouch for |
 | `GET /v1/keys` | anyone | the inventory: every key id, its algorithm, its state and its dates, revoked ones included; never a private member |
-| `GET /v1/jwks/{name}` | anyone | the key set a verifier caches: for a held key its active, next and retired keys; for a delegated name every key certified for it up to its `not_after` plus the overlap; for `keyryx.delegation-root` both halves of the root; never a revoked key |
+| `GET /v1/jwks/{name}` | anyone | the key set a verifier caches: for a held key its active, next and retired keys; for a delegated name every key certified for it and not retired, up to its `not_after` plus the overlap; for `keyryx.delegation-root` both halves of the root; never a revoked key |
 | `GET /v1/statements/{kid}` | anyone | `{"statement", "revoked_at"}`: the statement that certified a delegated key, and when it was revoked (0 when it was not) |
 | `POST /v1/keys/{name}/sign` | a consumer granted `sign` on `{name}` | body `{"statement_b64", "purpose"}`, a statement of at most 4 KiB; answer `{"alg", "kid", "signature_b64", "public_key_b64"}` |
 | `POST /v1/keys/{name}/challenge` | a consumer granted `delegate` on `{name}` | answer `{"challenge", "expires_at"}`: random, for this consumer and name, answerable once within a minute |
@@ -235,6 +235,20 @@ the key set holds the new key before it signs anything. A key id is certified
 once; a revoked one is never published or certified again, and neither is a
 key certified under a root key since revoked. At most four keys of one name
 are live at once.
+
+A consumer keeps its key in memory, so a restart makes a new one, and the keys
+of the processes before it stay live with nobody holding them. At the bound a
+new key of an owner retires that owner's oldest key, once the next key has been
+signing for the name's overlap: no token the old key signed can still be alive
+then, as long as the overlap is at least the life of the longest token. Until
+that moment the new key is refused with `409`, and the consumer asks again. A
+retired key leaves the key set at once and reads `retired` in `/v1/keys`. It is
+not revoked: its statement stands, and what it signed in its life still verifies
+at a witness. The retirement is a `retire` line on the use log and a record of
+its own under `retired/` in the data directory, so a rollback to an older
+release reads the statements as they were. This takes one signing process per
+owner of a name, which is what both launchers run. `labs/five-starts` plays five
+starts of a real vouchryx against a real custody.
 
 ### Who is asking
 
@@ -389,7 +403,7 @@ each what `GET /v1/statements/{kid}` answered.
 
 ## Testing
 
-160 tests. Tier T3: these are key and signature decisions where a wrong answer
+175 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
 mutation-tested.
 

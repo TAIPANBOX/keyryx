@@ -262,13 +262,15 @@ func (s *Server) inventory(w http.ResponseWriter, _ *http.Request) {
 		switch {
 		case e.Revoked != 0:
 			state = "revoked"
+		case e.Retired != 0:
+			state = "retired"
 		case now.Unix() < st.NotBefore:
 			state = "pending"
 		case now.Unix() >= st.NotAfter:
 			state = "expired"
 		}
 		out = append(out, entry{Name: st.Name, Alg: st.JWK.Alg, Kid: st.Kid, Mode: string(policy.Delegated), State: state,
-			Created: st.IssuedAt, Revoked: e.Revoked, Owner: st.Owner, NotBefore: st.NotBefore, NotAfter: st.NotAfter})
+			Created: st.IssuedAt, Retired: e.Retired, Revoked: e.Revoked, Owner: st.Owner, NotBefore: st.NotBefore, NotAfter: st.NotAfter})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
@@ -581,6 +583,12 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
 		sum := sha256.Sum256(raw)
 		logErr = s.Log.Append(uselog.Entry{At: s.now().Unix(), Consumer: consumer, Op: policy.OpDelegate, Key: name, Kid: st.Kid,
 			Digest: "sha256:" + hex.EncodeToString(sum[:])})
+		return logErr
+	}, func(old statement.Statement) error {
+		logErr = s.Log.Append(uselog.Entry{At: s.now().Unix(), Consumer: consumer, Op: "retire", Key: name, Kid: old.Kid})
+		if logErr == nil {
+			log.Printf("keyryx: retired delegated key %s of %s: a new key of its owner took its place at the bound", old.Kid, name)
+		}
 		return logErr
 	})
 	switch {
