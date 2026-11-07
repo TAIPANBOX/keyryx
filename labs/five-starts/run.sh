@@ -71,7 +71,7 @@ start_vouchryx() {
 		VOUCHRYX_KEYRYX_CREDENTIAL_FILE="$dir/bearer" VOUCHRYX_KEYRYX_ROOT_PIN="$pin" \
 		VOUCHRYX_ADDR="127.0.0.1:$VPORT" VOUCHRYX_ISSUER="$vouchryx" \
 		VOUCHRYX_TRUSTED_ISSUERS="https://idp.lab|vouchryx-lab|$dir/idp.jwks.json|unbound" \
-		VOUCHRYX_ALLOWED_AUDIENCES="https://resource.lab" VOUCHRYX_REVOCATIONS_PATH="$dir/revocations.ndjson" \
+		VOUCHRYX_ALLOWED_AUDIENCES="$vouchryx" VOUCHRYX_REVOCATIONS_PATH="$dir/revocations.ndjson" \
 		VOUCHRYX_EVENTS_PATH="$dir/vouchryx.ndjson" "$VOUCHRYX_BIN" >>"$dir/vouchryx.log" 2>&1 &
 	vpid=$!
 }

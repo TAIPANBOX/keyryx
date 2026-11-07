@@ -1,0 +1,14 @@
+10:40:11 mode paced, keyryx dev, overlap 1m, publish-ahead 1m
+10:40:23 start 1: token issued after 12s, signed by MGdmJvwkPFLC
+10:41:23 start 2: token issued after 60s, signed by C3hL4GpNFnKt
+10:42:24 start 3: token issued after 61s, signed by OLBOZNhH774r
+10:43:24 start 4: token issued after 60s, signed by XTA1-ZtGwZhP
+10:47:25 start 5: no token within 240s
+10:47:25 custody's key set holds 4 keys; what it says of each:
+  MGdmJvwkPFLC active retired=0
+  C3hL4GpNFnKt active retired=0
+  OLBOZNhH774r active retired=0
+  XTA1-ZtGwZhP active retired=0
+  custody: 2026/11/07 10:43:24 keyryx: refused delegate: reason=too_many_live_keys consumer="vouchryx" key="vouchryx"
+10:47:25 FAIL (paced)
+exit=1

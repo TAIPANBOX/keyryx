@@ -150,7 +150,8 @@ const recordVersion = 2
 // retireRec says a key retired. It is a file of its own, under dir/retired,
 // so a statement record never changes form: an older release of custody opened
 // on this directory after a rollback reads every statement it knows, ignores
-// the retirements, and is back to refusing at the bound.
+// the retirements, publishes those keys until their end, and is back to refusing
+// at the bound.
 type retireRec struct {
 	Retired int64  `json:"retired"`
 	V       int    `json:"v"`

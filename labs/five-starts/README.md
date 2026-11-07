@@ -22,3 +22,7 @@ each, so a run lasts minutes. On a box they are ten minutes and two.
 
 The exit status is 0 only when the fifth start got a token signed by a key in the
 set custody publishes, and that set holds at most four keys.
+
+`evidence/` holds the run of 2026-11-07 on forge: `before` is custody at `bfc19a3`,
+`after` is this change, with vouchryx at `dc42d1d` in both. The `before` run is the
+defect: the fifth start gets `too_many_live_keys` and no token.

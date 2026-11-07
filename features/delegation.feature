@@ -171,6 +171,12 @@ Feature: Delegated keys, certified by key statements
     When a start past the cap asks for a key
     Then it is refused, the oldest key stays published, and the new key is not
 
+  # @test:TestNoKeyIsCertifiedWhenTheRetirementCouldNotBeWritten
+  Scenario: No new key when the old key's retirement could not be written
+    Given a data directory that refuses the retirement
+    When a start past the cap asks for a key
+    Then it is refused, the oldest key stays published, and the new key is not
+
   # @test:TestAKeyLeavesOnDiskBeforeItsReplacementArrives
   Scenario: A crash between the two writes never leaves five keys
     Given a start past the cap that fails after the oldest key has retired

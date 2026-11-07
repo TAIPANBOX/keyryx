@@ -7,7 +7,7 @@ writers who saw the record when it was written.**
 
 [![CI](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-178-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-179-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/runtime%20dependencies-2-blue.svg)
 
@@ -178,9 +178,11 @@ To report a vulnerability, see [SECURITY.md](./SECURITY.md).
 - **Key statements**, one file per certified key under
   `KEYRYX_DATA/statements/<name>/`, each verified under the root at every
   start. Custody never holds a delegated key's private half.
+- **Retirements**, one file per retired key under
+  `KEYRYX_DATA/retired/<name>/`, each under the same state MAC.
 - **A use log**, `KEYRYX_DATA/use.ndjson`: one line per signature, key
-  statement, rotation and revocation, each naming the SHA-256 of the line
-  before it. A signature or a statement is answered only after its line reached
+  statement, rotation, revocation and retirement, each naming the SHA-256 of the
+  line before it. A signature or a statement is answered only after its line reached
   the disk. The log holds the digest of what was signed, never the statement.
 
 ### The surface
@@ -403,7 +405,7 @@ each what `GET /v1/statements/{kid}` answered.
 
 ## Testing
 
-175 tests. Tier T3: these are key and signature decisions where a wrong answer
+176 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
 mutation-tested.
 
@@ -476,7 +478,8 @@ Stated here rather than left to be discovered.
   state, not that it is the latest one: whoever can write the data directory
   can restore a copy of a record from before its revocation, and that copy's
   MAC holds. The use log keeps the revocation line, and the witness is what
-  would notice.
+  would notice. A retirement deleted the same way puts back a key whose private
+  half died with its process, and the use log keeps that line too.
 - **Challenges live in memory.** A restart drops the outstanding ones, and the
   consumer asks again.
 - **A late renewal can sign before verifiers refresh.** When a name's current

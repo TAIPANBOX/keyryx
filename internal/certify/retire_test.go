@@ -361,6 +361,21 @@ func TestAFileCustodyNeverWroteInTheRetiredDirectoryRefusesTheStart(t *testing.T
 			r["extra"] = 1
 			writeJSON(t, path, r)
 		},
+		"data after its record": func(t *testing.T, s *stand, kid string) {
+			path, _ := retirementFile(t, s.dir, kid)
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, append(raw, raw...), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a version custody does not write": func(t *testing.T, s *stand, kid string) {
+			path, r := retirementFile(t, s.dir, kid)
+			r["v"] = 2
+			writeJSON(t, path, r)
+		},
 		"a key no statement certifies": func(t *testing.T, s *stand, kid string) {
 			path, r := retirementFile(t, s.dir, kid)
 			writeJSON(t, filepath.Join(filepath.Dir(path), "no-such-kid.json"), r)
@@ -435,6 +450,24 @@ func TestNoKeyIsRetiredWhenItsLineCouldNotBeLogged(t *testing.T) {
 	s.reopen()
 	if !s.published("vouchryx-token")[held[0].kid] {
 		t.Fatal("after a restart the key that was not retired is gone")
+	}
+}
+
+func TestNoKeyIsCertifiedWhenTheRetirementCouldNotBeWritten(t *testing.T) {
+	s := newStand(t)
+	held := s.starts(MaxLive, time.Hour)
+	// A file where the directory should be: the write of the retirement fails.
+	if err := os.WriteFile(filepath.Join(s.dir, "retired"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s.now = s.now.Add(time.Hour)
+	fifth := newHolder(t)
+	if _, _, err := s.certify(fifth, "vouchryx", "vouchryx-token", life); err == nil {
+		t.Fatal("a key was certified with the retirement unwritten")
+	}
+	set := s.published("vouchryx-token")
+	if !set[held[0].kid] || set[fifth.kid] || len(set) != MaxLive {
+		t.Fatalf("the set is %v", set)
 	}
 }
 

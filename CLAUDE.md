@@ -409,7 +409,8 @@ docs or commit messages, as tooling for acting against anyone else.
     that does not hold is a revocation and an alarm, and a file custody cannot have
     written refuses the start. It is its own file so that no statement record
     changes form: an older release opened on the directory after a rollback reads
-    every statement it knows and is back to refusing at the bound. The old key
+    every statement it knows, publishes the retired keys again until their end,
+    and is back to refusing at the bound. The old key
     leaves on disk before the new one arrives, so a death between the two writes
     leaves one key fewer, never one more than the bound. What the MAC does not stop
     is the file being deleted, which is invariant 30's limit: it puts back a key
@@ -422,6 +423,7 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestARetirementSurvivesARestartOfCustody`, `TestAnEditedRetirementIsTreatedAsRevokedAndRaisesAnAlarm`,
     `TestAFileCustodyNeverWroteInTheRetiredDirectoryRefusesTheStart`,
     `TestRevokingAnAlarmedRetirementAcknowledgesIt`, `TestNoKeyIsRetiredWhenItsLineCouldNotBeLogged`,
+    `TestNoKeyIsCertifiedWhenTheRetirementCouldNotBeWritten`,
     `TestAKeyLeavesOnDiskBeforeItsReplacementArrives`,
     `TestARetirementIsOnTheUseLogAndTheInventoryNamesIt`; the live run: `labs/five-starts`)*
 
