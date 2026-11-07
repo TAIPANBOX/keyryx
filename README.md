@@ -76,7 +76,7 @@ flowchart TB
   read-only, and reports rewrites, truncations and missing roots
 - [x] The witness keeps its own RFC 9162 log, with tree heads signed by ES384 and ML-DSA-65
 - [x] `keyryx verify` checks a witness log and its streams, offline
-- [x] Releases v0.1.0 (2026-10-18), v0.1.1 (2026-10-19), v0.1.2 (2026-10-19) and v0.1.3 (2026-10-26) are published as `ghcr.io/taipanbox/keyryx:v0.1.0`, `ghcr.io/taipanbox/keyryx:v0.1.1`, `ghcr.io/taipanbox/keyryx:v0.1.2` and `ghcr.io/taipanbox/keyryx:v0.1.3`
+- [x] Releases v0.1.0 (2026-10-18), v0.1.1 (2026-10-19), v0.1.2 (2026-10-19), v0.1.3 (2026-10-26) and v0.1.4 (2026-11-07) are published as `ghcr.io/taipanbox/keyryx:v0.1.0`, `ghcr.io/taipanbox/keyryx:v0.1.1`, `ghcr.io/taipanbox/keyryx:v0.1.2`, `ghcr.io/taipanbox/keyryx:v0.1.3` and `ghcr.io/taipanbox/keyryx:v0.1.4`
 - [x] A consumer in another repository asks for and renews delegated keys: vouchryx v0.5.0 and later, with `VOUCHRYX_SIGNER=keyryx` (see NOT PROVEN)
 - [ ] A pack built from a real witness run carries the witness's attestation (see NOT PROVEN)
 - [ ] A cloud key management adapter (not planned: it is metered, and the operator decides)
@@ -88,7 +88,7 @@ The limits of each claim are in [NOT PROVEN](#not-proven).
 Pull the published image, or build from source (Go 1.27 or later).
 
 ```sh
-docker pull ghcr.io/taipanbox/keyryx:v0.1.3
+docker pull ghcr.io/taipanbox/keyryx:v0.1.4
 ```
 
 The image is static and distroless, runs as uid 65532, and its entrypoint is
@@ -111,13 +111,14 @@ KEYRYX_WITNESS_DATA=/var/lib/keyryx-witness KEYRYX_WITNESS_ROOT_KEY_FILE=/run/se
 Check the build provenance of a release before running it:
 
 ```sh
-gh attestation verify oci://ghcr.io/taipanbox/keyryx:v0.1.3 -R TAIPANBOX/keyryx
+gh attestation verify oci://ghcr.io/taipanbox/keyryx:v0.1.4 -R TAIPANBOX/keyryx
 ```
 
 Each release carries a build-provenance attestation and an SBOM. v0.1.0 carries
-no cosign signature; v0.1.1, v0.1.2 and v0.1.3 carry one, in the legacy cosign format. The
-keyless cosign check in [SECURITY.md](./SECURITY.md#verifying-a-build) has not
-been run against v0.1.1, v0.1.2 or v0.1.3 (see NOT PROVEN). The measured results are in
+no cosign signature; v0.1.1, v0.1.2, v0.1.3 and v0.1.4 carry one, in the legacy cosign format. The
+keyless cosign check in [SECURITY.md](./SECURITY.md#verifying-a-build) passed against
+v0.1.4 on 2026-11-07, with cosign v3.1.3 and `--new-bundle-format=false`; it has not been run against
+v0.1.1, v0.1.2 or v0.1.3 (see NOT PROVEN). The measured results are in
 [VALIDATION.md](./VALIDATION.md).
 
 ## Security
@@ -429,12 +430,13 @@ staticcheck ./...
 
 Stated here rather than left to be discovered.
 
-- **No container started from the published image has been run here.** Its
-  pull, tags and build provenance were checked (see VALIDATION.md); a container
-  run with the variables above was not.
+- **A container from the published image has run as stack-single's custody, not
+  as a witness.** v0.1.4 served vouchryx's delegated keys in a Compose lab of
+  stack-single and retired the oldest at the bound (see VALIDATION.md); earlier
+  images were checked by pull, tags and build provenance only.
 - **The cosign signatures of v0.1.1, v0.1.2 and v0.1.3 have not been verified here.** They are in the
   legacy cosign format, and cosign was not installed on the machine that
-  checked the release.
+  checked those releases. The signature of v0.1.4 was verified (see VALIDATION.md).
 - **The diagrams' text fit is measured against Helvetica's advance widths,** which
   Arial matches by design. A browser's own glyph shaping is not measured.
 - **trailryx reads the attestations from its 1.3.0 release on, and no pack built from a real witness run has been checked here.** With `TRAILRYX_WITNESS_ATTESTATIONS` naming the witness's `attestations` directory, `trailryx-node read --pack` attaches each file filed for the root and tenant it packs, and `trailryx-verify` checks it as it checks any witness; this repository has not run that check. Files written before v0.1.2 are mode 0600 and fail that read for any other account. The witness writes each root's attestation once and does not rewrite earlier ones, so those files keep their mode until they are changed by hand.
