@@ -430,9 +430,10 @@ staticcheck ./...
 
 Stated here rather than left to be discovered.
 
-- **No container started from the published image has been run here.** Its
-  pull, tags and build provenance were checked (see VALIDATION.md); a container
-  run with the variables above was not.
+- **A container from the published image has run as stack-single's custody, not
+  as a witness.** v0.1.4 served vouchryx's delegated keys in a Compose lab of
+  stack-single and retired the oldest at the bound (see VALIDATION.md); earlier
+  images were checked by pull, tags and build provenance only.
 - **The cosign signatures of v0.1.1, v0.1.2 and v0.1.3 have not been verified here.** They are in the
   legacy cosign format, and cosign was not installed on the machine that
   checked those releases. The signature of v0.1.4 was verified (see VALIDATION.md).
