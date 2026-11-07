@@ -22,6 +22,22 @@
 // A key id is certified once. A revoked key leaves the key set at once and is
 // never certified again, and a statement whose root key was revoked is no
 // longer published.
+//
+// # A restart at the cap
+//
+// A consumer keeps its key in memory, so a restart makes a new one, and the
+// keys of the processes before it stay live with nobody holding them. A name
+// publishes at most MaxLive keys. At that bound a new key of an owner retires
+// that owner's oldest key, once no token the old key signed can still be alive:
+// a consumer signs with the newest key that has begun, so the oldest signed
+// nothing after the next key's not_before, and the overlap is how long a token
+// lives. Until then the new key is refused, as it always was at the bound.
+//
+// A retired key is not a revoked one. Nothing says it was stolen: its statement
+// stands, and what it signed in its life still verifies at a witness. It only
+// leaves the key set. This reading needs one signing process per owner of a
+// name, which is what both launchers run; keys of several live processes of one
+// owner would be retired while in use.
 package certify
 
 import (
@@ -34,6 +50,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -52,7 +69,8 @@ const (
 	// ChallengeTTL is how long a challenge can be answered.
 	ChallengeTTL = time.Minute
 	// MaxLive bounds the keys of one name that are published at once: the
-	// current key, its renewal, and room for a restart or two.
+	// current key, its renewal, and room for a restart or two. Past it a new
+	// key retires its owner's oldest.
 	MaxLive = 4
 	// MinLifetime is the shortest life a statement is issued for.
 	MinLifetime = policy.MinLifetime
@@ -85,12 +103,14 @@ type Request struct {
 type Entry struct {
 	Statement statement.Statement
 	Revoked   int64
+	Retired   int64
 }
 
 type entry struct {
 	st      statement.Statement
 	raw     []byte
 	revoked int64
+	retired int64
 	// stateBad marks a record whose state MAC did not hold: revoked in
 	// memory, alarmed, its file left as it was found.
 	stateBad bool
@@ -126,6 +146,25 @@ type fileRec struct {
 
 // recordVersion is the statement record format: 2 carries the state MAC.
 const recordVersion = 2
+
+// retireRec says a key retired. It is a file of its own, under dir/retired,
+// so a statement record never changes form: an older release of custody opened
+// on this directory after a rollback reads every statement it knows, ignores
+// the retirements, publishes those keys until their end, and is back to refusing
+// at the bound.
+type retireRec struct {
+	Retired int64  `json:"retired"`
+	V       int    `json:"v"`
+	MAC     string `json:"mac"`
+}
+
+const (
+	// retireVersion is the retirement record format.
+	retireVersion = 1
+	// retireKind tags a retirement's state MAC, so a statement record's MAC
+	// never stands for one.
+	retireKind = "statement-retired"
+)
 
 // stateFields is what a statement record's state MAC covers: the version,
 // the name and kid it certifies, when it was revoked, and the digest of the
@@ -176,7 +215,82 @@ func Open(dir string, store *keystore.Store, p *policy.Policy, ahead time.Durati
 			r.byName[e.st.Name] = append(r.byName[e.st.Name], e)
 		}
 	}
+	if err := r.loadRetired(); err != nil {
+		return nil, err
+	}
 	return r, nil
+}
+
+// loadRetired reads every retirement under dir/retired. A file custody cannot
+// have written refuses the open. A retirement its MAC does not vouch for is
+// treated as a revocation and alarmed, as a statement's state is.
+func (r *Registry) loadRetired() error {
+	base := filepath.Join(r.dir, "retired")
+	names, err := os.ReadDir(base)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, n := range names {
+		if !n.IsDir() || !nameRe.MatchString(n.Name()) {
+			return fmt.Errorf("%s holds %q, which is not a directory this service writes", base, n.Name())
+		}
+		files, err := os.ReadDir(filepath.Join(base, n.Name()))
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			if strings.HasPrefix(f.Name(), ".tmp-") {
+				continue // a write that died before its rename
+			}
+			path := filepath.Join(base, n.Name(), f.Name())
+			e := r.byKid[strings.TrimSuffix(f.Name(), ".json")]
+			if e == nil || e.st.Name != n.Name() || e.st.Kid+".json" != f.Name() {
+				return fmt.Errorf("the retirement %s names no statement filed there; this service never writes one", path)
+			}
+			rec, err := readRetired(path)
+			if err != nil {
+				return err
+			}
+			mac, err := base64.RawURLEncoding.Strict().DecodeString(rec.MAC)
+			if err == nil && r.store.StateMACValid(mac, retireKind, stateFields(rec.V, e.st.Name, e.st.Kid, rec.Retired, e.raw)...) {
+				e.retired = rec.Retired
+				continue
+			}
+			e.stateBad = true
+			if e.revoked == 0 {
+				e.revoked = r.now().Unix()
+			}
+			r.alarms = append(r.alarms, keystore.Alarm{Kind: "statement", Name: e.st.Name, Kid: e.st.Kid, Reason: "state_mac_mismatch"})
+		}
+	}
+	return nil
+}
+
+// readRetired parses one retirement, whole.
+func readRetired(path string) (retireRec, error) {
+	refuse := func(why string) (retireRec, error) {
+		return retireRec{}, fmt.Errorf("the retirement %s %s; this service never writes one", path, why)
+	}
+	raw, err := os.ReadFile(path) // #nosec G304 -- a file in this service's own data directory
+	if err != nil {
+		return retireRec{}, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var rec retireRec
+	if err := dec.Decode(&rec); err != nil {
+		return refuse("is not a record: " + err.Error())
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		return refuse("carries data after its record")
+	}
+	if rec.V != retireVersion || rec.Retired <= 0 {
+		return refuse("is not a record of a version this service writes")
+	}
+	return rec, nil
 }
 
 // load reads one statement record. A statement that does not verify, or is
@@ -246,7 +360,7 @@ func (r *Registry) rootsPublished() map[string]bool {
 
 // live reports whether e is in its name's key set at now.
 func (r *Registry) live(e *entry, roots map[string]bool, now time.Time) bool {
-	if e.revoked != 0 || !roots[e.st.Roots.ES384] || !roots[e.st.Roots.MLDSA65] {
+	if e.revoked != 0 || e.retired != 0 || !roots[e.st.Roots.ES384] || !roots[e.st.Roots.MLDSA65] {
 		return false
 	}
 	return now.Before(time.Unix(e.st.NotAfter, 0).Add(r.overlap(e.st.Name)))
@@ -294,11 +408,39 @@ func (r *Registry) Challenge(consumer, name string) (string, int64, error) {
 	return c, exp.Unix(), nil
 }
 
+// retirable is the key of mine, the live keys of one owner of name, that a new
+// key may take the place of at the bound: the oldest, once the next one has
+// been signing for the name's overlap. An owner with one live key has no next
+// key, so nothing says its only key stopped signing.
+func (r *Registry) retirable(mine []*entry, now time.Time) *entry {
+	if len(mine) < 2 {
+		return nil
+	}
+	sort.SliceStable(mine, func(i, j int) bool {
+		a, b := mine[i].st, mine[j].st
+		if a.NotBefore != b.NotBefore {
+			return a.NotBefore < b.NotBefore
+		}
+		if a.IssuedAt != b.IssuedAt {
+			return a.IssuedAt < b.IssuedAt
+		}
+		return a.Kid < b.Kid
+	})
+	next := mine[1].st
+	if now.Before(time.Unix(next.NotBefore, 0).Add(r.overlap(next.Name))) {
+		return nil
+	}
+	return mine[0]
+}
+
 // Delegate certifies the key in req for consumer under name. The challenge is
 // used up by any attempt. record is called with the statement before it is
 // kept or published: when it fails, nothing is (no key certified with no
-// record of it, CLAUDE.md invariant 18).
-func (r *Registry) Delegate(consumer, name string, req Request, record func(statement.Statement, []byte) error) (statement.Statement, []byte, error) {
+// record of it, CLAUDE.md invariant 18). retired is called with the statement
+// of a key this certification retires, before that key leaves: when it fails,
+// nothing has changed. The old key leaves on disk first, so a death between the
+// two writes leaves one key fewer and never one more than the bound.
+func (r *Registry) Delegate(consumer, name string, req Request, record func(statement.Statement, []byte) error, retired func(statement.Statement) error) (statement.Statement, []byte, error) {
 	key, ok := r.delegated(name)
 	if !ok {
 		return statement.Statement{}, nil, ErrNotDelegated
@@ -329,17 +471,24 @@ func (r *Registry) Delegate(consumer, name string, req Request, record func(stat
 	}
 	roots := r.rootsPublished()
 	liveNow, validAhead := 0, false
+	var mine []*entry
 	for _, e := range r.byName[name] {
 		if !r.live(e, roots, now) {
 			continue
 		}
 		liveNow++
+		if e.st.Owner == consumer {
+			mine = append(mine, e)
+		}
 		if e.st.ValidAt(now.Add(r.ahead)) {
 			validAhead = true
 		}
 	}
+	var old *entry
 	if liveNow >= MaxLive {
-		return statement.Statement{}, nil, ErrTooManyLive
+		if old = r.retirable(mine, now); old == nil {
+			return statement.Statement{}, nil, ErrTooManyLive
+		}
 	}
 	notBefore := now
 	if validAhead {
@@ -360,6 +509,14 @@ func (r *Registry) Delegate(consumer, name string, req Request, record func(stat
 	if err != nil {
 		return statement.Statement{}, nil, fmt.Errorf("certify: the statement just signed does not verify: %w", err)
 	}
+	if old != nil {
+		if err := retired(old.st); err != nil {
+			return statement.Statement{}, nil, err
+		}
+		if err := r.retire(old, now.Unix()); err != nil {
+			return statement.Statement{}, nil, err
+		}
+	}
 	if err := record(st, raw); err != nil {
 		return statement.Statement{}, nil, err
 	}
@@ -372,6 +529,21 @@ func (r *Registry) Delegate(consumer, name string, req Request, record func(stat
 	return st, raw, nil
 }
 
+// retire takes e out of its name's key set for good, on disk first.
+func (r *Registry) retire(e *entry, at int64) error {
+	rec := retireRec{Retired: at, V: retireVersion}
+	rec.MAC = base64.RawURLEncoding.EncodeToString(r.store.StateMAC(retireKind, stateFields(rec.V, e.st.Name, e.st.Kid, rec.Retired, e.raw)...))
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(filepath.Join(r.dir, "retired", e.st.Name), e.st.Kid+".json", b); err != nil {
+		return err
+	}
+	e.retired = at
+	return nil
+}
+
 // persist writes a statement record atomically.
 func (r *Registry) persist(e *entry) error {
 	rec := fileRec{Revoked: e.revoked, Statement: e.raw, V: recordVersion}
@@ -380,7 +552,11 @@ func (r *Registry) persist(e *entry) error {
 	if err != nil {
 		return err
 	}
-	dir := filepath.Join(r.dir, "statements", e.st.Name)
+	return writeAtomic(filepath.Join(r.dir, "statements", e.st.Name), e.st.Kid+".json", b)
+}
+
+// writeAtomic puts b at dir/file whole or not at all, and syncs the directory.
+func writeAtomic(dir, file string, b []byte) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
@@ -400,10 +576,10 @@ func (r *Registry) persist(e *entry) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp.Name(), filepath.Join(dir, e.st.Kid+".json")); err != nil {
+	if err := os.Rename(tmp.Name(), filepath.Join(dir, file)); err != nil {
 		return err
 	}
-	if d, err := os.Open(dir); err == nil { // #nosec G304 -- this service's own statement directory
+	if d, err := os.Open(dir); err == nil { // #nosec G304 -- this service's own data directory
 		_ = d.Sync()
 		_ = d.Close()
 	}
@@ -472,6 +648,12 @@ func (r *Registry) Revoke(kid string) (statement.Statement, error) {
 		return statement.Statement{}, err
 	}
 	if e.stateBad {
+		// A retirement that raised the alarm goes with it: the revocation is
+		// the state now, and the file would raise the alarm again at every start.
+		path := filepath.Join(r.dir, "retired", e.st.Name, e.st.Kid+".json")
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return statement.Statement{}, err
+		}
 		e.stateBad = false
 		kept := r.alarms[:0]
 		for _, a := range r.alarms {
@@ -497,7 +679,7 @@ func (r *Registry) Inventory() []Entry {
 	defer r.mu.Unlock()
 	var out []Entry
 	for _, e := range r.byKid {
-		out = append(out, Entry{Statement: e.st, Revoked: e.revoked})
+		out = append(out, Entry{Statement: e.st, Revoked: e.revoked, Retired: e.retired})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i].Statement, out[j].Statement

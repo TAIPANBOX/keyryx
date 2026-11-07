@@ -14,6 +14,18 @@ NOT PROVEN.
 - @measured `./scripts/svg-text-fit.sh` 2026-10-19: OK, 39 texts in 2 diagrams fit their boxes; the smallest slack is 10.6px, against a minimum of 6px.
 - @measured `go test ./cmd/keyryx/ -run 'TestTheReadmeStatesWhatIsPublished|TestTheReadmeHasTheHouseSections|TestEveryImageInTheReadmeHasAltText|TestTheHouseDocumentsExist|TestTheFrozenRoutesAreTheRouteTables' -v` 2026-10-19: all five pass.
 
+## A restart past the bound
+
+The run of `labs/five-starts` on forge, a real vouchryx at `dc42d1d` against a real custody, each start ended by `kill -9`, overlap and publish-ahead a minute each unless a line says otherwise. The logs are in `labs/five-starts/evidence/`.
+
+- @measured `labs/five-starts/run.sh paced` with custody at `bfc19a3` 2026-11-07: four starts got a token, the fifth none in 240 seconds, `refused delegate: reason=too_many_live_keys`, exit 1.
+- @measured `labs/five-starts/run.sh paced` with this change 2026-11-07: all five got a token, the fifth 61 seconds after it started, signed by a key in the published set; the set held four keys and the oldest read `retired`, exit 0.
+- @measured `labs/five-starts/run.sh burst` with this change 2026-11-07: four starts killed in the same second, the fifth refused at once and answered at its retry, a token 362 seconds after it started, four keys in the set, exit 0.
+- @measured `OVERLAP=10m AHEAD=2m START_WAIT=260 LAST_WAIT=1500 labs/five-starts/run.sh paced` with this change 2026-11-07: each start waited for its token, so the fifth came inside the pause: refused twice, a token 721 seconds after it started, four keys in the set, exit 0.
+- @measured `OVERLAP=10m AHEAD=2m START_WAIT=260 LAST_WAIT=1500 labs/five-starts/run.sh burst` with this change 2026-11-07: refused three times, a token 1021 seconds after it started, four keys in the set, exit 0.
+- @measured `OLD_KEYRYX_BIN=... labs/five-starts/run.sh paced` 2026-11-07: custody at `bfc19a3` opened the directory holding a retirement, with no alarm, and published five keys.
+- @measured `python3 mutants.py` over `internal/certify` and `internal/api` 2026-11-07: 26 mutants of this change applied by hand, 26 caught by a named test; the list is in the pull request.
+
 ## The published releases
 
 - @measured `gh release list -R TAIPANBOX/keyryx` 2026-10-19: v0.1.1 is the latest release (published 2026-10-19T03:41:16Z), and v0.1.0 was published 2026-10-18T19:17:05Z.

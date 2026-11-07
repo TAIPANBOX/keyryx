@@ -1,0 +1,17 @@
+10:40:11 mode paced, keyryx dev, overlap 1m, publish-ahead 1m
+10:40:23 start 1: token issued after 12s, signed by HEm2c4l0MWFC
+10:41:24 start 2: token issued after 61s, signed by qihLW3Dg-b0j
+10:42:24 start 3: token issued after 60s, signed by tLFBohTplwDY
+10:43:24 start 4: token issued after 60s, signed by 0PcRXSq1vWV8
+10:44:25 start 5: token issued after 61s, signed by 47EFblE3k-E2
+10:44:25 custody's key set holds 4 keys; what it says of each:
+  HEm2c4l0MWFC retired retired=1794048204
+  qihLW3Dg-b0j active retired=0
+  tLFBohTplwDY active retired=0
+  0PcRXSq1vWV8 active retired=0
+  47EFblE3k-E2 active retired=0
+  custody: 2026/11/07 10:43:24 keyryx: retired delegated key HEm2c4l0MWFCJUrmP3U3uBAs9E3W-O59IHZNILwFB5w of vouchryx: a new key of its owner took its place at the bound
+10:44:25 rollback: the older custody opens this directory
+10:44:25 rollback: it answers, 5 keys in the set, alarms []
+10:44:25 PASS (paced)
+exit=0

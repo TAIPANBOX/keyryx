@@ -10,6 +10,11 @@ Feature: Delegated keys, certified by key statements
   both NIST category 3, so a statement keeps verifying after classical
   signatures are retired.
 
+  @decided 2026-11-07: at the cap a new key of an owner takes the place of that
+  owner's oldest key, and only once no token the old key signed can still be
+  alive. The private half stays in memory and the bound on published keys holds,
+  so a restart costs a slot for minutes at most, never for a key's whole life.
+
   # @test:TestDelegatedKeysParse
   Scenario: A policy declares delegated keys and who may have them certified
     Given a policy with a delegated ES256 key, its longest life and its overlap, and a consumer granted delegate on it
@@ -84,9 +89,105 @@ Feature: Delegated keys, certified by key statements
 
   # @test:TestTheLiveKeysOfANameAreCapped
   Scenario: A name holds a bounded number of live keys
-    Given a consumer that keeps asking for new keys
+    Given a consumer that asks for new keys one after another with no pause
     When it passes the cap
-    Then the next is refused until one expires out of its overlap
+    Then the next is refused, and the cap still holds until a key can leave
+
+  # @test:TestAStartPastTheCapRetiresTheOldestKeyOfItsOwner
+  Scenario: A restart past the cap costs the oldest key, not the service
+    Given a consumer whose four live keys came from four earlier starts, long enough ago that no token of the oldest is still alive
+    When it starts again and asks for a key
+    Then the new key is certified and published, the oldest has left the key set, and the set still holds four keys
+
+  # @test:TestEveryStartPastTheCapGetsAKey
+  Scenario: Start after start, each one gets a key
+    Given a consumer that restarts twelve times, an hour apart
+    When each start asks for a key
+    Then every one is certified, and the key set holds the newest four and no other
+
+  # @test:TestTheOldestKeyStaysWhileATokenItSignedCouldStillLive
+  Scenario: A key whose tokens could still be alive is not pushed out
+    Given four live keys, the second of them signing for one second less than the overlap
+    When a new key is asked for
+    Then it is refused and the key set stays as it was, and one second later the same request is answered
+
+  # @test:TestAKeyOfAnotherOwnerIsNeverRetired
+  Scenario: A consumer only ever retires its own key
+    Given a name two consumers share, its four live keys spread between them
+    When each asks for a new key
+    Then a consumer with a key to spare retires its own oldest, and the other consumer's keys stay in the set
+
+  # @test:TestNoScheduleOfStartsBreaksTheBoundOrCutsALiveToken
+  Scenario: No schedule of starts breaks the bound or cuts a live token
+    Given seeded schedules of starts, from a second to days apart
+    When each is played against custody
+    Then the key set never holds more than four keys, nothing is refused below the cap, and no key leaves early before its successor has signed for the overlap
+
+  # @test:TestTheOldestKeyIsStillTheOldestAfterARestartOfCustody
+  Scenario: A restart of custody does not change which key is the oldest
+    Given four live keys and a restart of custody
+    When a start past the cap asks for a key
+    Then the key that leaves is the one certified first
+
+  # @test:TestARetiredKeyIsNotARevokedKey
+  Scenario: A retired key has left the set and was never revoked
+    Given a key that was retired
+    When its statement is read, it is offered for certification again, and an admin then revokes it
+    Then the statement says it was not revoked, the second certification is refused, and the revocation still takes effect
+
+  # @test:TestACheckpointSignedBeforeItsKeyRetiredStillVerifiesAtTheWitness
+  Scenario: A record signed before its key retired still verifies at the witness
+    Given a key that signed a record while it was valid, and then was retired
+    When the witness reads the statement from custody and checks the record
+    Then it accepts the record, as it does for a key that merely expired, where a revoked key would be refused
+
+  # @test:TestARetirementSurvivesARestartOfCustody
+  Scenario: A retired key stays out of the set across a restart of custody
+    Given a retired key
+    When custody is restarted
+    Then the key is still out of the set, and the statement records on disk are exactly as they were
+
+  # @test:TestAnEditedRetirementIsTreatedAsRevokedAndRaisesAnAlarm
+  Scenario: An edited retirement is custody's alarm, not custody's word
+    Given a retirement record with its time moved, its MAC removed, or the MAC of another record
+    When custody opens
+    Then the key is treated as revoked, it is not published, and an alarm names it
+
+  # @test:TestAFileCustodyNeverWroteInTheRetiredDirectoryRefusesTheStart
+  Scenario: A retirement custody never wrote stops the start
+    Given a file in the retired directory that is not a record, or that names no statement
+    When custody opens
+    Then it refuses to start
+
+  # @test:TestRevokingAnAlarmedRetirementAcknowledgesIt
+  Scenario: An admin revoking the key acknowledges the alarm
+    Given a retirement record that raised an alarm
+    When an admin revokes that key
+    Then the alarm clears and stays clear across a restart, and the key is not published
+
+  # @test:TestNoKeyIsRetiredWhenItsLineCouldNotBeLogged
+  Scenario: No retirement without its line on the use log
+    Given a use log that cannot be written
+    When a start past the cap asks for a key
+    Then it is refused, the oldest key stays published, and the new key is not
+
+  # @test:TestNoKeyIsCertifiedWhenTheRetirementCouldNotBeWritten
+  Scenario: No new key when the old key's retirement could not be written
+    Given a data directory that refuses the retirement
+    When a start past the cap asks for a key
+    Then it is refused, the oldest key stays published, and the new key is not
+
+  # @test:TestAKeyLeavesOnDiskBeforeItsReplacementArrives
+  Scenario: A crash between the two writes never leaves five keys
+    Given a start past the cap that fails after the oldest key has retired
+    When custody is restarted
+    Then the new key is not there, the oldest is still out, and the set holds three keys
+
+  # @test:TestARetirementIsOnTheUseLogAndTheInventoryNamesIt
+  Scenario: The record says what happened to the key
+    Given a start past the cap through the routes
+    When the use log and the key inventory are read
+    Then the log has a retire line naming the key before the new key's delegate line, and the inventory says retired, and when
 
   # @test:TestStatementsSurviveARestartAndAnEditedOneRefusesTheStart
   Scenario: Certified keys survive a restart, and an edited statement stops it
