@@ -42,11 +42,15 @@ The run of `labs/five-starts` on forge, a real vouchryx at `dc42d1d` against a r
 - @measured `docker buildx imagetools inspect ghcr.io/taipanbox/keyryx:v0.1.3` 2026-10-26: an OCI index for linux/amd64 (`sha256:e4060fd1...`) and linux/arm64 (`sha256:9a34aec2...`) plus an attestation manifest.
 - @measured the `/usr/local/bin/keyryx` file pulled from each platform layer of `ghcr.io/taipanbox/keyryx:v0.1.3`, then `go version <file>`, 2026-10-26: go1.27.3 for linux/amd64 and for linux/arm64. The same check on v0.1.2 printed go1.27.2.
 - @measured `gh run list -R TAIPANBOX/keyryx` 2026-10-26: the release workflow for tag v0.1.3 (run 40247538465) succeeded.
+- @measured `gh run view 42415896474 -R TAIPANBOX/keyryx` 2026-11-07: the release workflow for tag v0.1.4 on `de529d1` succeeded, all three jobs (build image, build + push, release page). `gh release view v0.1.4` 2026-11-07: published 2026-11-07T21:28:43Z with `provenance.intoto.jsonl`, `sbom.cyclonedx.json` and `sbom.spdx.json`.
+- @measured `docker buildx imagetools inspect ghcr.io/taipanbox/keyryx:v0.1.4` on forge 2026-11-07: an OCI index `sha256:659723319e28c6c8895f5c2af6baa616b2e46ed90a3cf26d1c208dafe6a1ca3f` for linux/amd64 (`sha256:5f243d2d...`) and linux/arm64 (`sha256:cad0eaac...`) plus an attestation manifest.
+- @measured `cosign verify ghcr.io/taipanbox/keyryx@sha256:65972331... --new-bundle-format=false --certificate-identity-regexp '^https://github.com/TAIPANBOX/keyryx/\.github/workflows/release\.yml@refs/tags/v0\.1\.4$' --certificate-oidc-issuer https://token.actions.githubusercontent.com`, cosign v3.1.3 (the `ghcr.io/sigstore/cosign/cosign:v3.1.3` image) on forge 2026-11-07: exit 0, one signature, its subject `release.yml@refs/tags/v0.1.4`, the claims checked against the transparency log offline. `cosign tree` shows the legacy `.sig` tag and the SLSA provenance referrer.
+- @measured `gh attestation verify oci://ghcr.io/taipanbox/keyryx:v0.1.4 -R TAIPANBOX/keyryx --format json` 2026-11-07: exit 0, signer `release.yml@refs/tags/v0.1.4`, source ref `refs/tags/v0.1.4`.
 - @measured `gh run list -R TAIPANBOX/keyryx` 2026-10-19: the ci, secretscan and Scorecard workflows succeeded on `9bf76ec`, the head of main when this was checked.
 
 ## Not run here
 
-- The cosign signatures of v0.1.1, v0.1.2 and v0.1.3 were not verified. cosign is not installed on the machine that made these measurements, and the keyless command in SECURITY.md has not been run.
+- The cosign signatures of v0.1.1, v0.1.2 and v0.1.3 were not verified: cosign was not installed on the machine that measured those releases. v0.1.4's was (above).
 - No container was started from the published image.
 - The diagrams were not rendered in a browser. The text-fit gate measures against Helvetica's advance widths.
-- The release workflow ran on the tag v0.1.3 (run 40247538465, success) and earlier on v0.1.2 (run 39329101525, success). The pull request that carried the v0.1.3 notes did not run it.
+- The release workflow ran on the tag v0.1.4 (run 42415896474, success), v0.1.3 (run 40247538465, success) and v0.1.2 (run 39329101525, success). The v0.1.4 notes land after the tag, in the pull request that names it, so no run read them.
