@@ -16,6 +16,9 @@ case "$mode" in paced | burst) ;; *) echo "usage: $0 paced|burst" >&2; exit 2 ;;
 OLD_KEYRYX_BIN=${OLD_KEYRYX_BIN:-}
 KPORT=${KPORT:-14340}
 VPORT=${VPORT:-14310}
+OVERLAP=${OVERLAP:-1m}
+AHEAD=${AHEAD:-1m}
+START_WAIT=${START_WAIT:-200}
 LAST_WAIT=${LAST_WAIT:-480}
 
 dir=$(mktemp -d "${TMPDIR:-/tmp}/five-starts.XXXXXX")
@@ -27,14 +30,14 @@ vpid=""
 stop() {
 	local pid
 	for pid in "$vpid" "$kpid"; do
-		[ -n "$pid" ] && kill -9 "$pid" 2>/dev/null || true
+		if [ -n "$pid" ]; then kill -9 "$pid" 2>/dev/null || true; fi
 	done
 }
 trap stop EXIT
 say() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*"; }
 
-# The credential, the root key and a policy of one delegated name, with the
-# shortest overlap and publish-ahead custody takes, so a run lasts minutes.
+# The credential, the root key and a policy of one delegated name. The default
+# is the shortest overlap and publish-ahead custody takes, so a run lasts minutes.
 secret=$(openssl rand -hex 24)
 printf '%s' "$secret" >"$dir/bearer"
 openssl rand -hex 32 | tr -d '\n' >"$dir/root.key"
@@ -42,14 +45,14 @@ chmod 400 "$dir/bearer" "$dir/root.key"
 digest=$(printf '%s' "$secret" | sha256sum | cut -d' ' -f1)
 cat >"$dir/policy.json" <<POLICY
 {"version":1,
- "keys":[{"name":"vouchryx","alg":"ES256","mode":"delegated","max_lifetime":"72h","overlap":"1m"}],
+ "keys":[{"name":"vouchryx","alg":"ES256","mode":"delegated","max_lifetime":"72h","overlap":"$OVERLAP"}],
  "consumers":[{"name":"vouchryx","auth":{"key_digest":"sha256:$digest"},"grants":{"vouchryx":["delegate"]}}]}
 POLICY
 mkdir -m 700 "$dir/data"
 
 start_custody() { # the binary
 	KEYRYX_DATA="$dir/data" KEYRYX_ROOT_KEY_FILE="$dir/root.key" KEYRYX_POLICY="$dir/policy.json" \
-		KEYRYX_ADDR="127.0.0.1:$KPORT" KEYRYX_PUBLISH_AHEAD=1m "$1" custody >>"$dir/custody.log" 2>&1 &
+		KEYRYX_ADDR="127.0.0.1:$KPORT" KEYRYX_PUBLISH_AHEAD="$AHEAD" "$1" custody >>"$dir/custody.log" 2>&1 &
 	kpid=$!
 	for _ in $(seq 1 50); do
 		curl -fsS "$custody/healthz" >/dev/null 2>&1 && return 0
@@ -113,7 +116,7 @@ wait_token() { # start, seconds; sets token
 }
 
 verdict=PASS
-say "mode $mode, $("$KEYRYX_BIN" version 2>&1 | head -1), overlap 1m, publish-ahead 1m"
+say "mode $mode, $("$KEYRYX_BIN" version 2>&1 | head -1), overlap $OVERLAP, publish-ahead $AHEAD"
 for n in 1 2 3 4 5; do
 	before=$(certified)
 	start_vouchryx
@@ -126,7 +129,7 @@ for n in 1 2 3 4 5; do
 		kill_vouchryx
 		continue
 	fi
-	limit=200
+	limit=$START_WAIT
 	[ "$n" -eq 5 ] && limit=$LAST_WAIT
 	wait_token "$n" "$limit" || verdict=FAIL
 	kill_vouchryx

@@ -1,0 +1,17 @@
+10:54:05 mode paced, keyryx dev, overlap 10m, publish-ahead 2m
+10:54:17 start 1: token issued after 12s, signed by 0I8qidALcOmt
+10:56:18 start 2: token issued after 121s, signed by r7X8MJ43RShG
+10:58:19 start 3: token issued after 121s, signed by 8tlHExDIU0-R
+11:00:19 start 4: token issued after 120s, signed by QGB62MYWpHoz
+11:12:20 start 5: token issued after 721s, signed by mgB4TVOX0zTG
+11:12:20 custody's key set holds 4 keys; what it says of each:
+  0I8qidALcOmt retired retired=1794049819
+  r7X8MJ43RShG active retired=0
+  8tlHExDIU0-R active retired=0
+  QGB62MYWpHoz active retired=0
+  mgB4TVOX0zTG active retired=0
+  custody: 2026/11/07 11:00:19 keyryx: refused delegate: reason=too_many_live_keys consumer="vouchryx" key="vouchryx"
+  custody: 2026/11/07 11:05:19 keyryx: refused delegate: reason=too_many_live_keys consumer="vouchryx" key="vouchryx"
+  custody: 2026/11/07 11:10:19 keyryx: retired delegated key 0I8qidALcOmtd8hagL8pdnCJyT5Kc4gBHYJBgj27Jv8 of vouchryx: a new key of its owner took its place at the bound
+11:12:20 PASS (paced)
+exit=0

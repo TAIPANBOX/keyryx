@@ -1,0 +1,18 @@
+10:54:06 mode burst, keyryx dev, overlap 10m, publish-ahead 2m
+10:54:06 start 1: holds key 1, killed before it signs
+10:54:06 start 2: holds key 2, killed before it signs
+10:54:06 start 3: holds key 3, killed before it signs
+10:54:06 start 4: holds key 4, killed before it signs
+11:11:07 start 5: token issued after 1021s, signed by k1Nisq-7uKRG
+11:11:08 custody's key set holds 4 keys; what it says of each:
+  RB9ZC-E_c2ra retired retired=1794049746
+  WdiEZd1IjlAm active retired=0
+  ozIjI6BeyGFB active retired=0
+  uMp_z7kVOmVC active retired=0
+  k1Nisq-7uKRG active retired=0
+  custody: 2026/11/07 10:54:06 keyryx: refused delegate: reason=too_many_live_keys consumer="vouchryx" key="vouchryx"
+  custody: 2026/11/07 10:59:06 keyryx: refused delegate: reason=too_many_live_keys consumer="vouchryx" key="vouchryx"
+  custody: 2026/11/07 11:04:06 keyryx: refused delegate: reason=too_many_live_keys consumer="vouchryx" key="vouchryx"
+  custody: 2026/11/07 11:09:06 keyryx: retired delegated key RB9ZC-E_c2raiPvcQMvUmlnaY58RkZ94uM6yIcSy5BE of vouchryx: a new key of its owner took its place at the bound
+11:11:08 PASS (burst)
+exit=0
