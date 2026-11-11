@@ -89,7 +89,7 @@ fault "readme numbers: the prose count drifts from the suite" \
 
 # --- base-images-pinned-by-digest -----------------------------------------
 fault "base images: a FROM falls back to a moving tag" \
-  Dockerfile 'golang@sha256:f20d83a83e18dbd2a4714b8ffd4b30b287b6243962dd75608e86abcc63ba4efc' 'golang:1.27' \
+  Dockerfile 'golang@sha256:08bcb99a38f85a265f9a93d1d3323e2440eec333380f3ea26ee0dec9264bb41c' 'golang:1.27' \
   fail ./scripts/base-images-pinned-by-digest.sh
 fault_all "base images: every FROM line is gone" \
   Dockerfile 'FROM ' '# was FROM ' \
@@ -100,16 +100,16 @@ fault "base images: an unrelated label changes" \
 
 # --- dependencies-are-argued ----------------------------------------------
 fault "dependencies: a require line nobody argued" \
-  go.mod 'toolchain go1.27.3' $'toolchain go1.27.3\n\nrequire example.com/unargued v1.0.0' \
+  go.mod 'toolchain go1.27.4' $'toolchain go1.27.4\n\nrequire example.com/unargued v1.0.0' \
   fail ./scripts/dependencies-are-argued.sh
 fault "dependencies: a require block nobody argued" \
-  go.mod 'toolchain go1.27.3' $'toolchain go1.27.3\n\nrequire (\n\texample.com/unargued v1.0.0 // indirect\n)' \
+  go.mod 'toolchain go1.27.4' $'toolchain go1.27.4\n\nrequire (\n\texample.com/unargued v1.0.0 // indirect\n)' \
   fail ./scripts/dependencies-are-argued.sh
 fault "dependencies: go.mod names no module" \
   go.mod 'module github.com/TAIPANBOX/keyryx' 'modul github.com/TAIPANBOX/keyryx' \
   fail ./scripts/dependencies-are-argued.sh
 fault "dependencies: a comment in go.mod, nothing required" \
-  go.mod 'toolchain go1.27.3' $'toolchain go1.27.3\n\n// a comment, no dependency' \
+  go.mod 'toolchain go1.27.4' $'toolchain go1.27.4\n\n// a comment, no dependency' \
   pass ./scripts/dependencies-are-argued.sh
 
 # --- no-owner-quotes ------------------------------------------------------
