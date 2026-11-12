@@ -76,7 +76,7 @@ flowchart TB
   read-only, and reports rewrites, truncations and missing roots
 - [x] The witness keeps its own RFC 9162 log, with tree heads signed by ES384 and ML-DSA-65
 - [x] `keyryx verify` checks a witness log and its streams, offline
-- [x] Releases v0.1.0 (2026-10-18), v0.1.1 (2026-10-19), v0.1.2 (2026-10-19), v0.1.3 (2026-10-26) and v0.1.4 (2026-11-07) are published as `ghcr.io/taipanbox/keyryx:v0.1.0`, `ghcr.io/taipanbox/keyryx:v0.1.1`, `ghcr.io/taipanbox/keyryx:v0.1.2`, `ghcr.io/taipanbox/keyryx:v0.1.3` and `ghcr.io/taipanbox/keyryx:v0.1.4`
+- [x] Releases v0.1.0 (2026-10-18), v0.1.1 (2026-10-19), v0.1.2 (2026-10-19), v0.1.3 (2026-10-26), v0.1.4 (2026-11-07) and v0.1.5 (2026-11-12) are published as `ghcr.io/taipanbox/keyryx:v0.1.0`, `ghcr.io/taipanbox/keyryx:v0.1.1`, `ghcr.io/taipanbox/keyryx:v0.1.2`, `ghcr.io/taipanbox/keyryx:v0.1.3`, `ghcr.io/taipanbox/keyryx:v0.1.4` and `ghcr.io/taipanbox/keyryx:v0.1.5`
 - [x] A consumer in another repository asks for and renews delegated keys: vouchryx v0.5.0 and later, with `VOUCHRYX_SIGNER=keyryx` (see NOT PROVEN)
 - [ ] A pack built from a real witness run carries the witness's attestation (see NOT PROVEN)
 - [ ] A cloud key management adapter (not planned: it is metered, and the operator decides)
@@ -88,7 +88,7 @@ The limits of each claim are in [NOT PROVEN](#not-proven).
 Pull the published image, or build from source (Go 1.27 or later).
 
 ```sh
-docker pull ghcr.io/taipanbox/keyryx:v0.1.4
+docker pull ghcr.io/taipanbox/keyryx:v0.1.5
 ```
 
 The image is static and distroless, runs as uid 65532, and its entrypoint is
@@ -111,7 +111,7 @@ KEYRYX_WITNESS_DATA=/var/lib/keyryx-witness KEYRYX_WITNESS_ROOT_KEY_FILE=/run/se
 Check the build provenance of a release before running it:
 
 ```sh
-gh attestation verify oci://ghcr.io/taipanbox/keyryx:v0.1.4 -R TAIPANBOX/keyryx
+gh attestation verify oci://ghcr.io/taipanbox/keyryx:v0.1.5 -R TAIPANBOX/keyryx
 ```
 
 Each release carries a build-provenance attestation and an SBOM. v0.1.0 carries
