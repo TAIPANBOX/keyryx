@@ -7,7 +7,7 @@ writers who saw the record when it was written.**
 
 [![CI](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-179-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-207-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/runtime%20dependencies-2-blue.svg)
 
@@ -101,7 +101,8 @@ it alone.
 go build -o keyryx ./cmd/keyryx
 ./keyryx version
 KEYRYX_DATA=/var/lib/keyryx KEYRYX_ROOT_KEY_FILE=/run/secrets/keyryx-root \
-  KEYRYX_POLICY=/etc/keyryx/policy.json ./keyryx custody
+  KEYRYX_POLICY=/etc/keyryx/policy.json \
+  KEYRYX_EVENTS=/var/lib/agent-stack/events/keyryx-custody.ndjson ./keyryx custody
 KEYRYX_WITNESS_DATA=/var/lib/keyryx-witness KEYRYX_WITNESS_ROOT_KEY_FILE=/run/secrets/keyryx-witness-root \
   KEYRYX_WITNESS_EVENTS=/var/lib/agent-stack/events ./keyryx witness
 ```
@@ -143,8 +144,11 @@ The defaults protect the keys. Each one is a test or an invariant in
 - **Each consumer authenticates one way.** A consumer has a socket, a key digest
   compared in constant time, or a projected service-account token. Nothing
   resolves to a default consumer.
-- **Admin routes are closed until configured.** Rotate and revoke refuse every
-  call (403) unless `KEYRYX_ADMIN_KEYS` names an admin key digest.
+- **Rotation and revocation happen on the machine.** No admin route and no
+  admin key exist over the network. An operator runs `keyryx admin` against the
+  admin socket in custody's data directory, as root or as custody's own user,
+  and the kernel's record of who connected decides. Each change is announced on
+  the bus as `key_rotated` or `key_revoked`.
 - **No outbound call by default.** No time-stamping authority is called unless
   `KEYRYX_WITNESS_TSA_URL` names one.
 - **No delegated private key is held.** Custody holds the public half of a
@@ -191,15 +195,64 @@ To report a vulnerability, see [SECURITY.md](./SECURITY.md).
 | route | who | what |
 |---|---|---|
 | `GET /healthz` | anyone | liveness |
-| `GET /v1/state` | anyone | the role, the version, each key's active and next key id, and `alarms`: every state on disk custody could not vouch for |
+| `GET /v1/state` | anyone | the role, the version, each key's active and next key id, `alarms`: every state on disk custody could not vouch for, and `unannounced`: admin changes the bus has not heard of yet |
 | `GET /v1/keys` | anyone | the inventory: every key id, its algorithm, its state and its dates, revoked ones included; never a private member |
 | `GET /v1/jwks/{name}` | anyone | the key set a verifier caches: for a held key its active, next and retired keys; for a delegated name every key certified for it and not retired, up to its `not_after` plus the overlap; for `keyryx.delegation-root` both halves of the root; never a revoked key |
 | `GET /v1/statements/{kid}` | anyone | `{"statement", "revoked_at"}`: the statement that certified a delegated key, and when it was revoked (0 when it was not) |
 | `POST /v1/keys/{name}/sign` | a consumer granted `sign` on `{name}` | body `{"statement_b64", "purpose"}`, a statement of at most 4 KiB; answer `{"alg", "kid", "signature_b64", "public_key_b64"}` |
 | `POST /v1/keys/{name}/challenge` | a consumer granted `delegate` on `{name}` | answer `{"challenge", "expires_at"}`: random, for this consumer and name, answerable once within a minute |
 | `POST /v1/keys/{name}/delegate` | a consumer granted `delegate` on `{name}` | body `{"jwk", "challenge", "proof_b64", "lifetime_s"}`; answer `{"statement", "kid", "not_before", "not_after"}` |
-| `POST /v1/keys/{name}/rotate` | an admin key | creates the next key, published now, signing after `KEYRYX_PUBLISH_AHEAD`; for `keyryx.delegation-root`, both halves together |
-| `POST /v1/kids/{kid}/revoke` | an admin key | takes a key id out of every key set at once, held or delegated; revoking the active held key promotes the next one, or makes a fresh one |
+
+Rotation and revocation are not on that surface. They are served on the admin
+socket alone, `KEYRYX_DATA/admin.sock`:
+
+| route | who | what |
+|---|---|---|
+| `POST /v1/keys/{name}/rotate` | root or custody's user, on the admin socket | creates the next key, published now, signing after `KEYRYX_PUBLISH_AHEAD`; for `keyryx.delegation-root`, both halves together, and a rotation that stopped after one half is completed by the next call |
+| `POST /v1/kids/{kid}/revoke` | root or custody's user, on the admin socket | takes a key id out of every key set at once, held or delegated; revoking the active held key promotes the next one, or makes a fresh one |
+
+### Rotating and revoking
+
+```sh
+keyryx admin rotate wardryx-approval
+keyryx admin revoke <kid>
+```
+
+`keyryx admin` reads `KEYRYX_DATA`, the variable custody itself reads, and
+talks to `KEYRYX_DATA/admin.sock`. In custody's container it needs nothing
+more, for example `docker compose exec keyryx keyryx admin rotate
+wardryx-approval`. It opens neither the store nor the root key. A refusal
+prints its status only; the reason is in custody's log.
+
+Who is served:
+
+- The socket lives in the data directory, which custody holds at mode 0700,
+  and is itself mode 0600.
+- Custody reads the uid of the process at the other end from the kernel
+  (`SO_PEERCRED`) and serves root and its own uid only.
+- Custody's own uid can already read the root key and the data directory, so
+  serving it grants nothing new. In a container, a command runs as the image's
+  user unless it is started as root, so whoever may run a command in custody's
+  container may rotate.
+- The answer goes one request to a connection. Peer credentials are read on
+  Linux only; on any other platform every admin request is refused.
+
+Each change is announced on the bus (`KEYRYX_EVENTS`) as an agent-event from
+source `keyryx` under `agent://keyryx.internal/custody`:
+
+- `key_rotated` (info) carries `name`, `kid` (the new key), `previous_kid` and
+  `alg`. Revoking an active key with no next key announces the fresh key that
+  replaces it, from the revoked kid.
+- `key_revoked` (high) carries `name`, `kid` and `alg`.
+
+A consumer's own renewals and retirements are not announced. The announcement
+goes through an outbox in the data directory, `announce.ndjson`, so an
+answered change never waits on the bus's lock and is delivered after a
+restart if the bus was down. Delivery is at least once. A change whose
+announcement could not be queued answers 503 and stands; asking again
+announces it. The stream's directory must exist when custody starts;
+custody opens the stream itself from its delivery loop, so a writer holding
+the stream's lock delays announcements, never custody's start.
 
 ECDSA signatures are fixed-width `R || S` over SHA-256 (ES256) or SHA-384
 (ES384), as in JWS. Key ids are RFC 7638 thumbprints for EC keys and
@@ -279,7 +332,8 @@ Each consumer in the policy authenticates exactly one way:
 | `KEYRYX_ADDR` | no | where to listen over TCP; default `127.0.0.1:4340` |
 | `KEYRYX_SOCKET_DIR` | once a consumer uses `socket` | the parent of each socket consumer's directory |
 | `KEYRYX_K8S_ISSUERS` | once a consumer uses `k8s` | one `issuer\|audience\|jwks-file` per line or comma |
-| `KEYRYX_ADMIN_KEYS` | no | comma-separated `sha256:<64 hex>` digests of admin keys; unset, rotate and revoke refuse every call |
+| `KEYRYX_EVENTS` | yes | custody's own event stream on the bus, an absolute path, for example `/var/lib/stack/events/keyryx-custody.ndjson`; every rotation and revocation is announced there. Not `keyryx.ndjson`, the witness's stream, and not inside `KEYRYX_DATA` |
+| `KEYRYX_ADMIN_KEYS` | must be unset | no longer read as keys: set to anything but empty, it refuses the start, because rotation and revocation are on the admin socket |
 | `KEYRYX_PUBLISH_AHEAD` | no | how long a next key, or a renewed delegated key, is published before it signs; default `15m`, one minute to one day |
 
 Anything missing or malformed refuses the start with exit 2 and names the
@@ -406,7 +460,7 @@ each what `GET /v1/statements/{kid}` answered.
 
 ## Testing
 
-176 tests. Tier T3: these are key and signature decisions where a wrong answer
+204 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
 mutation-tested.
 
@@ -461,8 +515,11 @@ Stated here rather than left to be discovered.
   first starts. A real
   rotation of the delegation root reads as a changed root until an operator
   pins the new set, and no rotation has been run against a witness here.
-- **The witness reads the bus and the record, not custody's use log**, and
-  custody writes no `key_rotated` or `key_revoked` event yet.
+- **The witness reads the bus and the record, not custody's use log.** Custody
+  announces each admin rotation and revocation on the bus. An announcement
+  delivered just before a crash, whose cursor did not reach the disk, is
+  delivered again after the restart. A key custody replaces at its start
+  because its state record did not hold is raised as an alarm, not announced.
 - **Two consumers ask for keys, and neither pair is run here.** vouchryx
   v0.5.0 and later, with `VOUCHRYX_SIGNER=keyryx`, has its working key
   certified and renewed here through agent-stack-go's `keyclient`, and from
@@ -474,8 +531,12 @@ Stated here rather than left to be discovered.
   the `TOKENFUSE_CHECKPOINT_KEYRYX_*` variables) and has its Cloud's audit
   manifest signed by a held key (`TOKENFUSE_CLOUD_AUDIT_SIGNER=keyryx`), from
   its v1.18.0 release notes; this repository records no run of that pair
-  either. The Go producers' checkpoint writers are later pull requests in
-  their own repositories.
+  either. A Go producer's side is run here end to end: the built custody
+  certifies a checkpoint key through agent-stack-go's `keyclient`, the stream
+  and its signed checkpoints are written with agent-stack-go's writer, and the
+  built witness accepts every record and raises a high finding on a rewrite
+  (`TestARealProducersCheckpointsVerifyThroughARealCustodyAndWitness`). Which
+  producers in a stack sign their checkpoints is each launcher's wiring.
 - **An earlier record can be put back.** The state MAC proves custody wrote a
   state, not that it is the latest one: whoever can write the data directory
   can restore a copy of a record from before its revocation, and that copy's
@@ -490,10 +551,10 @@ Stated here rather than left to be discovered.
 - **No real Kubernetes cluster has authenticated a consumer.** The projected
   token path is tested against tokens this repository mints with the claims a
   cluster issues; it has not run against a kubelet's token.
-- **The constant-time compares are not timed.** Key and admin digests are
+- **The constant-time compares are not timed.** Consumer key digests are
   compared with `crypto/subtle` over every configured digest; nothing measures
   the timing.
-- **A rotation or revocation whose log line fails to write still stands.** The
+- **A rotation or revocation whose log line or announcement fails to write still stands.** The
   answer is 503 and the key's state has changed; only a signature is withheld
   until its line is written.
 - **The use log is protected against edits in its middle, not against a rewrite

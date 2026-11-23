@@ -51,7 +51,7 @@ POLICY
 mkdir -m 700 "$dir/data"
 
 start_custody() { # the binary
-	KEYRYX_DATA="$dir/data" KEYRYX_ROOT_KEY_FILE="$dir/root.key" KEYRYX_POLICY="$dir/policy.json" \
+	KEYRYX_DATA="$dir/data" KEYRYX_ROOT_KEY_FILE="$dir/root.key" KEYRYX_POLICY="$dir/policy.json" KEYRYX_EVENTS="$dir/keyryx-custody.ndjson" \
 		KEYRYX_ADDR="127.0.0.1:$KPORT" KEYRYX_PUBLISH_AHEAD="$AHEAD" "$1" custody >>"$dir/custody.log" 2>&1 &
 	kpid=$!
 	for _ in $(seq 1 50); do

@@ -216,12 +216,6 @@ Feature: Custody holds keys and signs only for the consumer they were granted to
     When custody starts
     Then it refuses each
 
-  # @test:TestAdminKeysAreDigestsComparedInConstantTime
-  Scenario: Admin keys are known only by their digests
-    Given two admin key digests
-    When the keys, near misses and the digests themselves are presented
-    Then only the keys are admins, and what is recorded is a fingerprint
-
   # @test:TestAGrantedConsumerGetsASignatureAndTheUseIsLogged
   Scenario: A granted consumer gets a signature, and the use is on the record
     Given a consumer on its socket and another with its key
@@ -236,7 +230,7 @@ Feature: Custody holds keys and signs only for the consumer they were granted to
 
   # @test:TestAnUnauthenticatedCallerGetsNoSignature
   Scenario: No credential, no signature
-    Given a caller with no credential, a wrong key or the admin key
+    Given a caller with no credential or a wrong key
     When it asks to sign
     Then it is refused
 
@@ -258,12 +252,6 @@ Feature: Custody holds keys and signs only for the consumer they were granted to
     When the key set is fetched each time
     Then it carries a cache lifetime of at most half the publish-ahead time, two keys in the overlap and after it, never the revoked key, and an undeclared set is not found
 
-  # @test:TestAdminRoutesNeedAnAdminKey
-  Scenario: Rotation and revocation need an admin key
-    Given rotate and revoke asked without a key, with a wrong one, a consumer's, or with no admin keys configured
-    When each is sent
-    Then each is refused, a good one works once, a second rotation conflicts, and the rotation is on the log under the admin key's fingerprint
-
   # @test:TestTheRouteTableIsTheMux
   Scenario: The route table is what is served, both ways
     Given the declared route table
@@ -280,7 +268,7 @@ Feature: Custody holds keys and signs only for the consumer they were granted to
   Scenario: A complete environment comes up
     Given every variable set
     When custody reads its environment
-    Then it holds the root key, the policy, the admin keys, the publish-ahead and the loopback default address
+    Then it holds the root key, the policy, the publish-ahead, the event stream, the admin socket in its data directory and the loopback default address
 
   # @test:TestEachRequiredVariableIsNamedWhenMissing
   Scenario: A missing required variable is named
@@ -296,7 +284,7 @@ Feature: Custody holds keys and signs only for the consumer they were granted to
 
   # @test:TestMalformedValuesRefuseTheStart
   Scenario: A malformed value refuses the start
-    Given a bad publish-ahead, a plaintext admin key, a bad or missing or oversized policy, an exposed root key, a bad address or issuer line
+    Given a bad publish-ahead, a relative or unclean event stream path, the witness's stream or a path inside the data directory as custody's, a data directory too long for its admin socket, a bad or missing or oversized policy, an exposed root key, a bad address or issuer line
     When custody reads its environment
     Then it refuses each
 

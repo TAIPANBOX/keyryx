@@ -263,7 +263,7 @@ const consumerSecret = "manifest-consumer-key-0123456789"
 // directory is short enough for a unix socket path.
 func custodyEnv(t *testing.T) (map[string]string, string) {
 	t.Helper()
-	dir := t.TempDir()
+	dir := shortDir(t)
 	data := filepath.Join(dir, "data")
 	if err := os.Mkdir(data, 0o700); err != nil {
 		t.Fatal(err)
@@ -297,7 +297,21 @@ func custodyEnv(t *testing.T) (map[string]string, string) {
 		"KEYRYX_POLICY":        pol,
 		"KEYRYX_ADDR":          addr,
 		"KEYRYX_SOCKET_DIR":    sockets,
+		"KEYRYX_EVENTS":        filepath.Join(dir, "keyryx-custody.ndjson"),
 	}, addr
+}
+
+// shortDir is a temporary directory short enough for the admin socket custody
+// keeps in its data directory, which a test's own temporary directory is not
+// on every platform.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("/tmp", "kx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(d) })
+	return d
 }
 
 func envList(m map[string]string) []string {

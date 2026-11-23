@@ -9,13 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
-
-const stateAdminSecret = "manifest-admin-key-0123456789"
 
 // lockedBuffer is a buffer a child process writes into while the test reads it.
 type lockedBuffer struct {
@@ -48,9 +47,12 @@ func TestTheBuiltCustodyKeepsAnEditedBackKeyOutAndSaysSo(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and starts the binary")
 	}
+	if runtime.GOOS != "linux" {
+		t.Skip("revokes through the admin socket, whose peer credentials are read on Linux only")
+	}
 	_, r := load(t)
 	bin := buildBinary(t, r)
-	dir := t.TempDir()
+	dir := shortDir(t)
 	data := filepath.Join(dir, "data")
 	if err := os.Mkdir(data, 0o700); err != nil {
 		t.Fatal(err)
@@ -60,7 +62,6 @@ func TestTheBuiltCustodyKeepsAnEditedBackKeyOutAndSaysSo(t *testing.T) {
 		t.Fatal(err)
 	}
 	cs := sha256.Sum256([]byte(consumerSecret))
-	as := sha256.Sum256([]byte(stateAdminSecret))
 	pol := filepath.Join(dir, "policy.json")
 	if err := os.WriteFile(pol, []byte(`{"version":1,"keys":[{"name":"wardryx-approval","alg":"ES256"}],
  "consumers":[{"name":"wardryx","auth":{"key_digest":"sha256:`+hex.EncodeToString(cs[:])+`"},"grants":{"wardryx-approval":["sign"]}}]}`), 0o400); err != nil {
@@ -68,7 +69,16 @@ func TestTheBuiltCustodyKeepsAnEditedBackKeyOutAndSaysSo(t *testing.T) {
 	}
 	addr := freeAddr(t)
 	env := envList(map[string]string{"KEYRYX_DATA": data, "KEYRYX_ROOT_KEY_FILE": rootFile, "KEYRYX_POLICY": pol, "KEYRYX_ADDR": addr,
-		"KEYRYX_ADMIN_KEYS": "sha256:" + hex.EncodeToString(as[:]), "KEYRYX_PUBLISH_AHEAD": "1m"})
+		"KEYRYX_EVENTS": filepath.Join(dir, "keyryx-custody.ndjson"), "KEYRYX_PUBLISH_AHEAD": "1m"})
+	admin := func(args ...string) int {
+		cmd := exec.Command(bin, append([]string{"admin"}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Logf("keyryx admin %v: %v %s", args, err, out)
+		}
+		return cmd.ProcessState.ExitCode()
+	}
 	stderr := &lockedBuffer{}
 	start := func() *exec.Cmd {
 		cmd := exec.Command(bin, "custody")
@@ -111,11 +121,11 @@ func TestTheBuiltCustodyKeepsAnEditedBackKeyOutAndSaysSo(t *testing.T) {
 	first := start()
 	_, st := call("GET", "/v1/state", "")
 	old := st["keys"].([]any)[0].(map[string]any)["active_kid"].(string)
-	if code, _ := call("POST", "/v1/keys/wardryx-approval/rotate", stateAdminSecret); code != http.StatusOK {
+	if code := admin("rotate", "wardryx-approval"); code != 0 {
 		_ = first.Process.Kill()
 		t.Fatalf("rotate: %d", code)
 	}
-	if code, _ := call("POST", "/v1/kids/"+old+"/revoke", stateAdminSecret); code != http.StatusOK {
+	if code := admin("revoke", old); code != 0 {
 		_ = first.Process.Kill()
 		t.Fatalf("revoke: %d", code)
 	}

@@ -163,8 +163,14 @@ fault "compat: COMPATIBILITY.md drifts from the manifest" \
 fault "compat: the manifest freezes nothing" \
   compat/1.0.json '"frozen": {' '"frozen_removed": {' \
   fail ./scripts/compat-surface.sh
+fault "compat: a frozen admin route leaves the code" \
+  internal/api/api.go '{"POST", "/v1/kids/{kid}/revoke", "admin"}' '{"POST", "/v1/kids/{kid}/revokes", "admin"}' \
+  fail ./scripts/compat-surface.sh
+fault "compat: a frozen announcement is renamed" \
+  internal/announce/announce.go 'KeyRevoked = "key_revoked"' 'KeyRevoked = "key_revoke"' \
+  fail ./scripts/compat-surface.sh
 fault "compat: a comment on a route table changes, no name does" \
-  internal/api/api.go '// Routes is the route table: every route this service serves, and only those.' '// Routes is the route table: every route this service serves, and only those (see the README).' \
+  internal/api/api.go '// AdminRoutes is the admin socket'"'"'s route table, and only those.' '// AdminRoutes is the admin socket'"'"'s route table, and only those (see the README).' \
   pass ./scripts/compat-surface.sh
 
 # --- svg-text-fit --------------------------------------------------------

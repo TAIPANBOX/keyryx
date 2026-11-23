@@ -162,13 +162,17 @@ func TestTheFrozenRoutesAreTheRouteTables(t *testing.T) {
 	if err := json.Unmarshal([]byte(repoFile(t, "compat/1.0.json")), &m); err != nil {
 		t.Fatalf("compat/1.0.json: %v", err)
 	}
-	var custody, witness []string
+	var custody, admin, witness []string
 	for _, r := range api.Routes() {
 		custody = append(custody, r.Pattern)
+	}
+	for _, r := range api.AdminRoutes() {
+		admin = append(admin, r.Pattern)
 	}
 	for _, r := range witnessapi.Routes() {
 		witness = append(witness, r.Pattern)
 	}
 	compare(t, "http.custody.routes", m.Frozen["http.custody.routes"], custody)
+	compare(t, "socket.custody.admin.routes", m.Frozen["socket.custody.admin.routes"], admin)
 	compare(t, "http.witness.routes", m.Frozen["http.witness.routes"], witness)
 }
