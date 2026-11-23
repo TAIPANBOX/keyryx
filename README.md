@@ -332,7 +332,7 @@ Each consumer in the policy authenticates exactly one way:
 | `KEYRYX_ADDR` | no | where to listen over TCP; default `127.0.0.1:4340` |
 | `KEYRYX_SOCKET_DIR` | once a consumer uses `socket` | the parent of each socket consumer's directory |
 | `KEYRYX_K8S_ISSUERS` | once a consumer uses `k8s` | one `issuer\|audience\|jwks-file` per line or comma |
-| `KEYRYX_EVENTS` | yes | custody's own event stream on the bus, an absolute path, for example `/var/lib/stack/events/keyryx-custody.ndjson`; every rotation and revocation is announced there. Not `keyryx.ndjson`, the witness's stream, and not inside `KEYRYX_DATA` |
+| `KEYRYX_EVENTS` | yes | custody's own event stream on the bus, an absolute path, for example `/var/lib/stack/events/keyryx-custody.ndjson`; every rotation and revocation is announced there. Not `keyryx.ndjson`, the witness's stream, and not inside `KEYRYX_DATA`. Custody writes it only as a regular file with one link owned by its own uid: a launcher pre-creates it for custody's uid, or custody creates it in a directory it owns |
 | `KEYRYX_ADMIN_KEYS` | must be unset | no longer read as keys: set to anything but empty, it refuses the start, because rotation and revocation are on the admin socket |
 | `KEYRYX_PUBLISH_AHEAD` | no | how long a next key, or a renewed delegated key, is published before it signs; default `15m`, one minute to one day |
 

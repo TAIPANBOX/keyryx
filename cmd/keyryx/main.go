@@ -35,7 +35,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/TAIPANBOX/agent-stack-go/v2/event"
 	"github.com/TAIPANBOX/keyryx/internal/announce"
 	"github.com/TAIPANBOX/keyryx/internal/api"
 	"github.com/TAIPANBOX/keyryx/internal/auth"
@@ -146,7 +145,7 @@ func custody(stderr io.Writer) int {
 	if info, err := os.Stat(filepath.Dir(cfg.Events)); err != nil || !info.IsDir() {
 		return refuse(fmt.Errorf("KEYRYX_EVENTS %s: its directory is not there", cfg.Events))
 	}
-	out, err := announce.Open(cfg.DataDir, func() (announce.Emitter, error) { return event.NewChainedWriter(cfg.Events) }, time.Now, log.Printf)
+	out, err := announce.Open(cfg.DataDir, func() (announce.Emitter, error) { return announce.OpenBus(cfg.Events, os.Geteuid()) }, time.Now, log.Printf)
 	if err != nil {
 		return refuse(fmt.Errorf("KEYRYX_DATA: %w", err))
 	}

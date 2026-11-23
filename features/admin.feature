@@ -121,6 +121,12 @@ Feature: Rotation and revocation happen on the machine, and the bus hears of the
     When the next announcement is enqueued and the outbox opens again
     Then the failed one is gone and the outbox reads, and after a fragment it could not take back it takes nothing more
 
+  # @test:TestTheBusStreamIsCustodysOwnRegularFile
+  Scenario: Custody writes its announcements only into its own regular file
+    Given custody's stream made by custody, a link at its name pointing at a file custody writes, a file with two names, a file another uid owns and a directory
+    When the delivery loop opens the stream
+    Then only custody's own regular file with one link is taken, and a link's target is never written
+
   # @test:TestTheBusIsOpenedByTheDeliveryLoop
   Scenario: The bus is opened by the delivery loop, not at the start
     Given a bus stream that does not open at first

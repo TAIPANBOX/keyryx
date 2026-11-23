@@ -461,7 +461,10 @@ docs or commit messages, as tooling for acting against anyone else.
     completed, however late. The outbox takes back a failed append, delivers
     to `KEYRYX_EVENTS` (required; not `keyryx.ndjson`, not inside
     `KEYRYX_DATA`) in order and at least once, by a loop that opens the stream
-    itself and tries once more on stop, so a writer holding the bus's lock
+    itself, only when it is a regular file with one link owned by custody's uid
+    (the bus directory is shared, and a link planted at the name must not make
+    custody append to its own use log), and tries once more on stop, so a
+    writer holding the bus's lock
     delays an announcement and never an answer or custody's start. A
     consumer's renewals and retirements are not announced. *(tests: `TestTheAdminSocketServesOnlyRootOrCustodysOwnUser`,
     `TestRotationAndRevocationAreNotServedOverTheNetwork`,
@@ -474,6 +477,7 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestAnAdminChangeWhoseUseLogDidNotWriteIsStillAnnounced`,
     `TestAFailedAppendIsTakenBackAndTheOutboxStillReads`,
     `TestTheBusIsOpenedByTheDeliveryLoop`, `TestAChangeMadeJustBeforeAStopIsDelivered`,
+    `TestTheBusStreamIsCustodysOwnRegularFile`,
     `TestHasAndCountReadTheWholeHistory`, `TestACursorWriteLeftBehindIsCleared`,
     `TestTheStateRouteSaysHowManyChangesWaitForTheBus`,
     `TestAnAnnouncementIsAnAgentEventFromCustodyOnTheChain`,
