@@ -16,9 +16,10 @@ import (
 )
 
 // adminArg is what a key name or a kid may be on the command line: the
-// policy's name grammar and the base64url of a thumbprint both fit, a path
-// separator, a dot segment or a query does not.
-var adminArg = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+// policy's name grammar and the base64url of a thumbprint, which may begin
+// with `_` or `-`, both fit; a path separator, a leading dot (so no dot
+// segment) or a query does not.
+var adminArg = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$`)
 
 // admin asks custody, on its admin socket, to rotate a key or revoke a kid.
 // The socket is `$KEYRYX_DATA/admin.sock`, the variable custody itself reads,

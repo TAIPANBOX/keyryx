@@ -171,14 +171,14 @@ Feature: Rotation and revocation happen on the machine, and the bus hears of the
 
   # @test:TestTheAdminCommandRefusesWhatItCannotSend
   Scenario: keyryx admin refuses what it cannot send
-    Given an unknown verb, a missing or extra argument, a name with a path, query or slash, no data directory, or no custody on the socket
+    Given an unknown verb, a missing or extra argument, a name with a path, query, slash, dot segment or leading dot, no data directory, or no custody on the socket
     When keyryx admin runs
     Then it exits 2 for what it cannot send and 1 when custody does not answer
 
   # @test:TestTheAdminCommandAsksCustodyOnTheSocketInItsDataDirectory
   Scenario: keyryx admin asks custody on the socket in its data directory
     Given a listener on the admin socket
-    When keyryx admin rotates a name and revokes kids
+    When keyryx admin rotates a name and revokes kids, among them kids that begin with an underscore or a hyphen
     Then it sends exactly those routes, prints the answer on success and only the status on a refusal
 
   # @test:TestTheBuiltCustodyRotatesAndRevokesThroughItsAdminSocketAndTellsTheBus

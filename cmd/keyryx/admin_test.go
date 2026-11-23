@@ -22,6 +22,8 @@ func TestTheAdminCommandRefusesWhatItCannotSend(t *testing.T) {
 		"a query in the kid": {"admin", "revoke", "abc?x=1"},
 		"a slash in the kid": {"admin", "revoke", "a/b"},
 		"an empty name":      {"admin", "rotate", ""},
+		"a dot segment":      {"admin", "revoke", ".."},
+		"a leading dot":      {"admin", "rotate", ".hidden"},
 	} {
 		if code, out, _ := call(args...); code != exitRefused || out != "" {
 			t.Errorf("%s: exit %d, stdout %q", name, code, out)
@@ -66,11 +68,19 @@ func TestTheAdminCommandAsksCustodyOnTheSocketInItsDataDirectory(t *testing.T) {
 	if code, _, _ := call("admin", "revoke", "FXG0i91Nag8j0ITnQFhO8mLmW8ijBkZvamjNsS9g1dE"); code != 0 {
 		t.Fatalf("revoke: exit %d", code)
 	}
+	// A thumbprint is base64url: it may begin with either of its two marks.
+	for _, kid := range []string{"_SVJp3yq5b6IfvEZBX_Tnm8C4XUKPW9jHkrpKpgaOa4", "-Z9yQ3n0cEaKJpG3S5Yl0nA2iN0b7pV4wZ1kXc6u8Ts"} {
+		if code, _, errOut := call("admin", "revoke", kid); code != 0 {
+			t.Fatalf("revoke %s: exit %d, %q", kid, code, errOut)
+		}
+	}
 	code, out, errOut := call("admin", "revoke", "refuse-me")
 	if code != 1 || out != "" || !strings.Contains(errOut, "403") || strings.Contains(errOut, "admin_peer") {
 		t.Fatalf("a refusal: exit %d, stdout %q, stderr %q", code, out, errOut)
 	}
-	want := []string{"POST /v1/keys/keyryx.delegation-root/rotate", "POST /v1/kids/FXG0i91Nag8j0ITnQFhO8mLmW8ijBkZvamjNsS9g1dE/revoke", "POST /v1/kids/refuse-me/revoke"}
+	want := []string{"POST /v1/keys/keyryx.delegation-root/rotate", "POST /v1/kids/FXG0i91Nag8j0ITnQFhO8mLmW8ijBkZvamjNsS9g1dE/revoke",
+		"POST /v1/kids/_SVJp3yq5b6IfvEZBX_Tnm8C4XUKPW9jHkrpKpgaOa4/revoke", "POST /v1/kids/-Z9yQ3n0cEaKJpG3S5Yl0nA2iN0b7pV4wZ1kXc6u8Ts/revoke",
+		"POST /v1/kids/refuse-me/revoke"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("custody was asked %v, want %v", got, want)
 	}
