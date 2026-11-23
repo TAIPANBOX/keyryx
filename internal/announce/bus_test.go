@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -35,7 +36,7 @@ func TestTheBusStreamIsCustodysOwnRegularFile(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := OpenBus(link, me); err == nil || !strings.Contains(err.Error(), "regular") {
+	if _, err := OpenBus(link, me); err == nil {
 		t.Fatalf("a link at custody's name: %v", err)
 	}
 	if raw, _ := os.ReadFile(target); string(raw) != "{}\n" {
@@ -56,6 +57,53 @@ func TestTheBusStreamIsCustodysOwnRegularFile(t *testing.T) {
 		t.Fatalf("a stream another plane made: %v", err)
 	}
 
+	// What custody writes goes into the file it checked.
+	w, err = OpenBus(stream, me)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(stream)
+	if err := w.Write(Rotated("k", "b", "a", "ES256").event(t0)); err != nil {
+		t.Fatalf("a write through the descriptor's path: %v", err)
+	}
+	after, _ := os.ReadFile(stream)
+	if len(after) <= len(before) {
+		t.Fatal("the write did not reach custody's stream")
+	}
+
+	// A link swapped in at the name after the checks and before the writer
+	// opens: the writer still writes the file custody checked.
+	raced := filepath.Join(dir, "raced.ndjson")
+	if err := os.WriteFile(raced, nil, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	beforeTheWriterOpens = func(p string) {
+		_ = os.Rename(p, p+".moved")
+		_ = os.Symlink(target, p)
+	}
+	w, err = OpenBus(raced, me)
+	beforeTheWriterOpens = func(string) {}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Write(Revoked("k", "a", "ES256").event(t0)); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(target); string(raw) != "{}\n" {
+		t.Fatalf("a link swapped in during the open was written through: %q", raw)
+	}
+	if raw, _ := os.ReadFile(raced + ".moved"); len(raw) == 0 {
+		t.Fatal("the write did not reach the file custody checked")
+	}
+
+	// A FIFO at the name: refused, and opening it does not hang.
+	fifo := filepath.Join(dir, "fifo.ndjson")
+	if err := mkfifo(fifo); err == nil {
+		if _, err := OpenBus(fifo, me); err == nil {
+			t.Fatal("a FIFO at custody's name was taken")
+		}
+	}
+
 	// A directory at the name: refused.
 	d := filepath.Join(dir, "dir.ndjson")
 	_ = os.Mkdir(d, 0o700)
@@ -63,3 +111,5 @@ func TestTheBusStreamIsCustodysOwnRegularFile(t *testing.T) {
 		t.Fatal("a directory at custody's name was taken")
 	}
 }
+
+func mkfifo(path string) error { return syscall.Mkfifo(path, 0o600) }

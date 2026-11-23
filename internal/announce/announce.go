@@ -98,6 +98,16 @@ type Announcement struct {
 	Data map[string]string `json:"data"`
 }
 
+// event is the agent-event an announcement made at ts becomes on the bus.
+func (a Announcement) event(ts time.Time) event.Event {
+	data := make(map[string]any, len(a.Data))
+	for k, v := range a.Data {
+		data[k] = v
+	}
+	return event.Event{Schema: event.SchemaV10, TS: ts.UTC().Format("2006-01-02T15:04:05.000Z"),
+		Source: "keyryx", Type: a.Type, AgentID: Subject, Severity: severity[a.Type], Data: data}
+}
+
 type line struct {
 	Seq  int64             `json:"seq"`
 	At   string            `json:"at"`
@@ -335,13 +345,8 @@ func (o *Outbox) Deliver() error {
 		}
 		l := o.lines[o.done]
 		o.mu.Unlock()
-		data := make(map[string]any, len(l.Data))
-		for k, v := range l.Data {
-			data[k] = v
-		}
 		ts, _ := time.Parse(time.RFC3339Nano, l.At)
-		if err := o.emit.Write(event.Event{Schema: event.SchemaV10, TS: ts.UTC().Format("2006-01-02T15:04:05.000Z"),
-			Source: "keyryx", Type: l.Type, AgentID: Subject, Severity: severity[l.Type], Data: data}); err != nil {
+		if err := o.emit.Write(Announcement{Type: l.Type, Data: l.Data}.event(ts)); err != nil {
 			return fmt.Errorf("announce: the bus did not take %s %d: %w", l.Type, l.Seq, err)
 		}
 		if err := o.writeCursor(l.Seq); err != nil {

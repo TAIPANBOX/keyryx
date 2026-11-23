@@ -123,9 +123,9 @@ Feature: Rotation and revocation happen on the machine, and the bus hears of the
 
   # @test:TestTheBusStreamIsCustodysOwnRegularFile
   Scenario: Custody writes its announcements only into its own regular file
-    Given custody's stream made by custody, a link at its name pointing at a file custody writes, a file with two names, a file another uid owns and a directory
-    When the delivery loop opens the stream
-    Then only custody's own regular file with one link is taken, and a link's target is never written
+    Given custody's stream made by custody, a link at its name pointing at a file custody writes, a file with two names, a file another uid owns, a FIFO, a directory, and a link swapped in after the checks
+    When the delivery loop opens the stream and writes
+    Then only custody's own regular file with one link is taken, the write lands in the file that was checked, and a link's target is never written
 
   # @test:TestTheBusIsOpenedByTheDeliveryLoop
   Scenario: The bus is opened by the delivery loop, not at the start
