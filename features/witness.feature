@@ -395,3 +395,9 @@ Feature: An independent witness of the record
     Given the built binary reading a stream
     When a line is rewritten and re-linked, the process killed, and its log checked and then edited
     Then the rewrite reaches keyryx.ndjson, heads are served, and verify accepts the log and then refuses it
+
+  # @test:TestARealProducersCheckpointsVerifyThroughARealCustodyAndWitness
+  Scenario: A real producer's checkpoints verify through the real custody and witness
+    Given the built custody certifying a producer's delegated checkpoint key through agent-stack-go's keyclient, and the producer writing its stream and signed checkpoints with agent-stack-go's writer
+    When the built witness reads the stream, its checkpoints and the key's statement from custody, and later a covered line is rewritten and the next one re-linked
+    Then it logs every checkpoint as accepted and raises nothing on the honest stream, and raises a high finding on the rewrite, which the chain alone accepts

@@ -3,7 +3,9 @@
 // Every value is a statement about which keys custody holds and who may use
 // them, so a missing or malformed one refuses the start and the message names
 // the variable (CLAUDE.md invariant 6). Nothing has a default that signs: the
-// defaults are a loopback address, a fifteen-minute overlap and no admin key.
+// defaults are a loopback address and a fifteen-minute overlap. Rotation and
+// revocation have no key at all: they are asked on the admin socket in the
+// data directory, by root or custody's own user (invariant 43).
 package config
 
 import (
@@ -14,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/TAIPANBOX/keyryx/internal/auth"
@@ -25,6 +28,14 @@ import (
 // on the port the estate's port map reserves for it.
 const DefaultAddr = "127.0.0.1:4340"
 
+// AdminSocketName is the admin socket's file inside the data directory, which
+// keystore holds at mode 0700: only custody's user and root can reach it.
+const AdminSocketName = "admin.sock"
+
+// MaxSocketPath is the longest unix socket path every platform this builds for
+// takes (macOS: 104 bytes with the terminating NUL; Linux takes 108).
+const MaxSocketPath = 103
+
 // DefaultPublishAhead is how long a next key is published before it signs.
 const DefaultPublishAhead = 15 * time.Minute
 
@@ -35,7 +46,8 @@ type Config struct {
 	Root         [32]byte
 	Policy       *policy.Policy
 	SocketDir    string
-	AdminKeys    [][32]byte
+	AdminSocket  string
+	Events       string
 	Issuers      []auth.Issuer
 	PublishAhead time.Duration
 }
@@ -90,8 +102,32 @@ func FromEnv() (Config, error) {
 		c.PublishAhead = d
 	}
 
-	if c.AdminKeys, err = auth.ParseAdminKeys(os.Getenv("KEYRYX_ADMIN_KEYS")); err != nil {
-		return c, fmt.Errorf("KEYRYX_ADMIN_KEYS: %w", err)
+	// A network admin key is gone (@decided 2026-11-23). A deployment that
+	// still sets one would believe it rotates over the network; it is told
+	// at the start instead. Set but empty is how a launcher passes an unset
+	// value, and means nothing.
+	if os.Getenv("KEYRYX_ADMIN_KEYS") != "" {
+		return c, errors.New("KEYRYX_ADMIN_KEYS is set, and custody no longer takes an admin key over the network: rotate and revoke with `keyryx admin` on the admin socket, as root or as custody's user, and unset it")
+	}
+	c.AdminSocket = filepath.Join(c.DataDir, AdminSocketName)
+	if len(c.AdminSocket) > MaxSocketPath {
+		return c, fmt.Errorf("KEYRYX_DATA %s is too long for the admin socket %s inside it (%d bytes, a unix socket path holds %d)", c.DataDir, c.AdminSocket, len(c.AdminSocket), MaxSocketPath)
+	}
+	c.Events = os.Getenv("KEYRYX_EVENTS")
+	if c.Events == "" {
+		return c, errors.New("KEYRYX_EVENTS is not set: custody announces every rotation and revocation on the bus, in its own stream (keyryx-custody.ndjson), and a key change nobody hears of is not one it makes")
+	}
+	if !filepath.IsAbs(c.Events) || filepath.Clean(c.Events) != c.Events {
+		return c, fmt.Errorf("KEYRYX_EVENTS %q is not a clean absolute path", c.Events)
+	}
+	// The witness's findings are keyryx.ndjson, a stream of its own (invariant
+	// 36); custody writes beside it, never into it, and never into its own
+	// data directory, which nothing on the bus reads.
+	if filepath.Base(c.Events) == "keyryx.ndjson" {
+		return c, fmt.Errorf("KEYRYX_EVENTS %s is the witness's stream; custody's is keyryx-custody.ndjson", c.Events)
+	}
+	if rel, err := filepath.Rel(filepath.Clean(c.DataDir), c.Events); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return c, fmt.Errorf("KEYRYX_EVENTS %s is inside KEYRYX_DATA, which no reader of the bus can read", c.Events)
 	}
 
 	if c.Issuers, err = auth.ParseIssuers(os.Getenv("KEYRYX_K8S_ISSUERS"), readJWKS); err != nil {

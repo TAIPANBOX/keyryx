@@ -23,6 +23,7 @@
           "KEYRYX_POLICY": { "required": true, "role": "custody" },
           "KEYRYX_ADDR": { "required": false, "role": "custody" },
           "KEYRYX_SOCKET_DIR": { "required": false, "role": "custody" },
+          "KEYRYX_EVENTS": { "required": true, "role": "custody" },
           "KEYRYX_ADMIN_KEYS": { "required": false, "role": "custody" },
           "KEYRYX_K8S_ISSUERS": { "required": false, "role": "custody" },
           "KEYRYX_PUBLISH_AHEAD": { "required": false, "role": "custody" },
@@ -71,9 +72,13 @@
           "value": "KEYRYX_SOCKET_DIR is required once a consumer in KEYRYX_POLICY authenticates by socket, and KEYRYX_K8S_ISSUERS once one authenticates by a projected service-account token",
           "why": "the manifest's required/optional split cannot express a variable required only by what another one says; internal/config holds the conditional rule and its tests"
         },
-        "admin_keys_default": {
-          "value": "unset: rotate and revoke refuse every call (403)",
-          "why": "optional because a deployment may rotate by restarting with a new policy; fail closed when unset, never open"
+        "admin_socket": {
+          "value": "rotate and revoke are served only on $KEYRYX_DATA/admin.sock (mode 0600, in the 0700 data directory), to a peer whose uid the kernel reports as root or custody's own, through `keyryx admin`; no admin route or key exists over the network, and KEYRYX_ADMIN_KEYS set to anything but empty refuses the start",
+          "why": "the peer's uid comes from the kernel (SO_PEERCRED) at run time, which the manifest's variable list cannot express; internal/api and internal/config hold the rule and its tests"
+        },
+        "announcements": {
+          "value": "every rotation and revocation an admin makes is announced on KEYRYX_EVENTS (custody's own stream, keyryx-custody.ndjson on the bus) as key_rotated or key_revoked, through an outbox in the data directory that delivers at least once",
+          "why": "delivery to the bus happens after the answer, by a loop the manifest cannot run; internal/announce holds the rule and its tests"
         }
       }
     }

@@ -40,10 +40,23 @@ const keyPolicy = `{"version":1,"keys":[{"name":"wardryx-approval","alg":"ES256"
 const k8sPolicy = `{"version":1,"keys":[{"name":"cloud-audit","alg":"ES256"}],
  "consumers":[{"name":"cloud","auth":{"k8s":{"issuer":"https://k3s.acme.example","subject":"system:serviceaccount:a:b"}},"grants":{"cloud-audit":["sign"]}}]}`
 
+// shortDir is a temporary directory with a path short enough for a unix
+// socket inside it, which a test's own temporary directory is not on every
+// platform.
+func shortDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("/tmp", "kx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(d) })
+	return d
+}
+
 // base is a complete environment with a socket consumer.
 func base(t *testing.T) map[string]string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := shortDir(t)
 	data := filepath.Join(dir, "data")
 	if err := os.Mkdir(data, 0o700); err != nil {
 		t.Fatal(err)
@@ -59,12 +72,13 @@ func base(t *testing.T) map[string]string {
 		"KEYRYX_ROOT_KEY_FILE": writeFile(t, dir, "root.key", strings.Repeat("ab", 32)+"\n", 0o400),
 		"KEYRYX_POLICY":        writeFile(t, dir, "policy.json", socketPolicy, 0o400),
 		"KEYRYX_SOCKET_DIR":    sockets,
+		"KEYRYX_EVENTS":        filepath.Join(dir, "events", "keyryx-custody.ndjson"),
 	}
 }
 
 func withEnv(t *testing.T, env map[string]string) (Config, error) {
 	t.Helper()
-	for _, k := range []string{"KEYRYX_DATA", "KEYRYX_ROOT_KEY_FILE", "KEYRYX_POLICY", "KEYRYX_ADDR", "KEYRYX_SOCKET_DIR", "KEYRYX_ADMIN_KEYS", "KEYRYX_K8S_ISSUERS", "KEYRYX_PUBLISH_AHEAD"} {
+	for _, k := range []string{"KEYRYX_DATA", "KEYRYX_ROOT_KEY_FILE", "KEYRYX_POLICY", "KEYRYX_ADDR", "KEYRYX_SOCKET_DIR", "KEYRYX_ADMIN_KEYS", "KEYRYX_K8S_ISSUERS", "KEYRYX_PUBLISH_AHEAD", "KEYRYX_EVENTS"} {
 		t.Setenv(k, env[k])
 	}
 	return FromEnv()
@@ -72,13 +86,13 @@ func withEnv(t *testing.T, env map[string]string) (Config, error) {
 
 func TestAFullConfigComesUp(t *testing.T) {
 	env := base(t)
-	env["KEYRYX_ADMIN_KEYS"] = digest("admin")
 	env["KEYRYX_PUBLISH_AHEAD"] = "30m"
 	c, err := withEnv(t, env)
 	if err != nil {
 		t.Fatalf("a complete environment was refused: %v", err)
 	}
-	if c.Addr != DefaultAddr || c.DataDir != env["KEYRYX_DATA"] || c.Policy == nil || len(c.AdminKeys) != 1 || c.PublishAhead != 30*time.Minute {
+	if c.Addr != DefaultAddr || c.DataDir != env["KEYRYX_DATA"] || c.Policy == nil || c.PublishAhead != 30*time.Minute ||
+		c.Events != env["KEYRYX_EVENTS"] || c.AdminSocket != filepath.Join(env["KEYRYX_DATA"], "admin.sock") {
 		t.Fatalf("config %+v", c)
 	}
 	if c.Root == [32]byte{} {
@@ -97,7 +111,7 @@ func TestEachRequiredVariableIsNamedWhenMissing(t *testing.T) {
 	if _, err := withEnv(t, base(t)); err != nil {
 		t.Fatalf("control: %v", err)
 	}
-	for _, v := range []string{"KEYRYX_DATA", "KEYRYX_ROOT_KEY_FILE", "KEYRYX_POLICY"} {
+	for _, v := range []string{"KEYRYX_DATA", "KEYRYX_ROOT_KEY_FILE", "KEYRYX_POLICY", "KEYRYX_EVENTS"} {
 		env := base(t)
 		env[v] = ""
 		_, err := withEnv(t, env)
@@ -144,8 +158,16 @@ func TestMalformedValuesRefuseTheStart(t *testing.T) {
 		"a publish-ahead that is not a duration": func(e map[string]string) { e["KEYRYX_PUBLISH_AHEAD"] = "soon" },
 		"a publish-ahead under a minute":         func(e map[string]string) { e["KEYRYX_PUBLISH_AHEAD"] = "30s" },
 		"a publish-ahead over a day":             func(e map[string]string) { e["KEYRYX_PUBLISH_AHEAD"] = "25h" },
-		"an admin key in the clear":              func(e map[string]string) { e["KEYRYX_ADMIN_KEYS"] = "admin" },
-		"a policy that does not parse":           func(e map[string]string) { e["KEYRYX_POLICY"] = writeFile(t, t.TempDir(), "p.json", "{", 0o400) },
+		"an events path that is relative":        func(e map[string]string) { e["KEYRYX_EVENTS"] = "events/keyryx-custody.ndjson" },
+		"an events path that is not clean":       func(e map[string]string) { e["KEYRYX_EVENTS"] = "/var/lib/stack/../keyryx-custody.ndjson" },
+		"the witness's stream as custody's":      func(e map[string]string) { e["KEYRYX_EVENTS"] = "/var/lib/stack/events/keyryx.ndjson" },
+		"an events path inside the data directory": func(e map[string]string) {
+			e["KEYRYX_EVENTS"] = filepath.Join(e["KEYRYX_DATA"], "events", "keyryx-custody.ndjson")
+		},
+		"a data directory too long for its admin socket": func(e map[string]string) {
+			e["KEYRYX_DATA"] = "/" + strings.Repeat("d", MaxSocketPath-len("/admin.sock"))
+		},
+		"a policy that does not parse": func(e map[string]string) { e["KEYRYX_POLICY"] = writeFile(t, t.TempDir(), "p.json", "{", 0o400) },
 		"a root key readable by the group": func(e map[string]string) {
 			e["KEYRYX_ROOT_KEY_FILE"] = writeFile(t, t.TempDir(), "r.key", strings.Repeat("ab", 32), 0o440)
 		},
@@ -161,5 +183,28 @@ func TestMalformedValuesRefuseTheStart(t *testing.T) {
 		if _, err := withEnv(t, env); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+func TestANetworkAdminKeyRefusesTheStart(t *testing.T) {
+	for _, v := range []string{digest("admin"), "admin", " "} {
+		env := base(t)
+		env["KEYRYX_ADMIN_KEYS"] = v
+		_, err := withEnv(t, env)
+		if err == nil || !strings.Contains(err.Error(), "KEYRYX_ADMIN_KEYS") || !strings.Contains(err.Error(), "keyryx admin") {
+			t.Errorf("KEYRYX_ADMIN_KEYS=%q: %v", v, err)
+		}
+	}
+	// Set but empty is how a launcher passes an unset value.
+	env := base(t)
+	env["KEYRYX_ADMIN_KEYS"] = ""
+	if _, err := withEnv(t, env); err != nil {
+		t.Fatalf("an empty KEYRYX_ADMIN_KEYS was refused: %v", err)
+	}
+	// The longest data directory whose admin socket still fits.
+	env = base(t)
+	env["KEYRYX_DATA"] = "/" + strings.Repeat("d", MaxSocketPath-len("/admin.sock")-1)
+	if _, err := withEnv(t, env); err != nil && strings.Contains(err.Error(), "too long") {
+		t.Fatalf("a data directory whose socket fits was refused as too long: %v", err)
 	}
 }

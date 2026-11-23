@@ -34,7 +34,7 @@ func TestTheBuiltCustodyCertifiesADelegatedKeyAndKeepsItAcrossARestart(t *testin
 	}
 	_, r := load(t)
 	bin := buildBinary(t, r)
-	dir := t.TempDir()
+	dir := shortDir(t)
 	data := filepath.Join(dir, "data")
 	if err := os.Mkdir(data, 0o700); err != nil {
 		t.Fatal(err)
@@ -51,7 +51,8 @@ func TestTheBuiltCustodyCertifiesADelegatedKeyAndKeepsItAcrossARestart(t *testin
 		t.Fatal(err)
 	}
 	addr := freeAddr(t)
-	env := envList(map[string]string{"KEYRYX_DATA": data, "KEYRYX_ROOT_KEY_FILE": rootFile, "KEYRYX_POLICY": pol, "KEYRYX_ADDR": addr})
+	env := envList(map[string]string{"KEYRYX_DATA": data, "KEYRYX_ROOT_KEY_FILE": rootFile, "KEYRYX_POLICY": pol, "KEYRYX_ADDR": addr,
+		"KEYRYX_EVENTS": filepath.Join(dir, "keyryx-custody.ndjson")})
 	start := func() *exec.Cmd {
 		cmd := exec.Command(bin, "custody")
 		cmd.Env = env

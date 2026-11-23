@@ -189,34 +189,3 @@ func TestIssuersParseStrictly(t *testing.T) {
 		}
 	}
 }
-
-func TestAdminKeysAreDigestsComparedInConstantTime(t *testing.T) {
-	keys, err := ParseAdminKeys(digest("admin-key-one-0123456789") + ", " + digest("admin-key-two-0123456789"))
-	if err != nil || len(keys) != 2 {
-		t.Fatalf("well-formed admin keys: %v %v", keys, err)
-	}
-	if fp, ok := Admin(keys, "Bearer admin-key-two-0123456789"); !ok || fp == "" || strings.Contains(fp, "admin-key") {
-		t.Fatalf("the second admin key: %q %v (a fingerprint, never the key)", fp, ok)
-	}
-	for _, h := range []string{"", "Bearer ", "Bearer admin-key-one", "admin-key-one-0123456789", "Bearer " + digest("admin-key-one-0123456789")} {
-		if _, ok := Admin(keys, h); ok {
-			t.Errorf("%q was an admin", h)
-		}
-	}
-	if _, ok := Admin(nil, "Bearer admin-key-one-0123456789"); ok {
-		t.Error("with no admin keys configured somebody was an admin")
-	}
-	for name, spec := range map[string]string{
-		"plaintext":   "admin-key-one-0123456789",
-		"short":       "sha256:abcd",
-		"not hex":     "sha256:" + strings.Repeat("z", 64),
-		"a duplicate": digest("a") + "," + digest("a"),
-	} {
-		if _, err := ParseAdminKeys(spec); err == nil {
-			t.Errorf("%s: accepted", name)
-		}
-	}
-	if keys, err := ParseAdminKeys(""); err != nil || len(keys) != 0 {
-		t.Errorf("unset: %v %v", keys, err)
-	}
-}

@@ -17,12 +17,8 @@ package auth
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -225,46 +221,4 @@ func splitList(spec string) []string {
 		}
 	}
 	return out
-}
-
-// ParseAdminKeys reads KEYRYX_ADMIN_KEYS: comma-separated `sha256:<64 hex>`
-// digests of the admin bearer keys. Never a key in the clear.
-func ParseAdminKeys(spec string) ([][32]byte, error) {
-	var out [][32]byte
-	seen := map[[32]byte]bool{}
-	for _, item := range splitList(spec) {
-		hexPart, ok := strings.CutPrefix(item, "sha256:")
-		var d [32]byte
-		if !ok || len(hexPart) != 64 {
-			return nil, errors.New("an admin key is not sha256:<64 hex>; the service takes the digest, never the key")
-		}
-		if _, err := hex.Decode(d[:], []byte(hexPart)); err != nil {
-			return nil, errors.New("an admin key digest is not hex")
-		}
-		if seen[d] {
-			return nil, errors.New("an admin key digest is listed twice")
-		}
-		seen[d] = true
-		out = append(out, d)
-	}
-	return out, nil
-}
-
-// Admin resolves an admin bearer to a fingerprint for the use log: the first
-// eight bytes of the key's digest, never the key. Every configured digest is
-// compared in constant time.
-func Admin(keys [][32]byte, header string) (string, bool) {
-	tok, ok := bearer(header)
-	if !ok || len(keys) == 0 {
-		return "", false
-	}
-	sum := sha256.Sum256([]byte(tok))
-	hit := 0
-	for _, k := range keys {
-		hit += subtle.ConstantTimeCompare(sum[:], k[:])
-	}
-	if hit != 1 {
-		return "", false
-	}
-	return "sha256:" + hex.EncodeToString(sum[:8]), true
 }

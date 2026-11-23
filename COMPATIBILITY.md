@@ -2,17 +2,24 @@
 
 `TAIPANBOX/keyryx` promises the surface below from its 1.0 (`compat/1.0.json`, held by `scripts/compat-surface.sh` on every push). A frozen name is not removed or renamed within a major; an additive thing may appear as a minor; an experimental thing may change in any release.
 
-Status: pre-1.0 (latest tag v0.1.5): no tag has frozen this surface yet. The surface below is what 1.0 will freeze, and scripts/compat-surface.sh holds it on every push, so the 1.0 tag freezes something the gate has already held. TestTheFrozenRoutesAreTheRouteTables holds the two route kinds against the route tables in both directions.
+Status: pre-1.0 (latest tag v0.1.5): no tag has frozen this surface yet. The surface below is what 1.0 will freeze, and scripts/compat-surface.sh holds it on every push, so the 1.0 tag freezes something the gate has already held. TestTheFrozenRoutesAreTheRouteTables holds the three route kinds against the route tables in both directions.
 
 ## Frozen
 
-### cli.subcommands (4)
+### cli.subcommands (5)
 
 - `custody`
 - `witness`
 - `verify`
+- `admin`
 - `version`
 - held in: `cmd/keyryx/main.go`
+
+### custody.announcements (2)
+
+- `key_rotated`
+- `key_revoked`
+- held in: `internal/announce/announce.go`
 
 ### env (27)
 
@@ -21,7 +28,7 @@ Status: pre-1.0 (latest tag v0.1.5): no tag has frozen this surface yet. The sur
 - `KEYRYX_POLICY`
 - `KEYRYX_ADDR`
 - `KEYRYX_SOCKET_DIR`
-- `KEYRYX_ADMIN_KEYS`
+- `KEYRYX_EVENTS`
 - `KEYRYX_K8S_ISSUERS`
 - `KEYRYX_PUBLISH_AHEAD`
 - `KEYRYX_WITNESS_DATA`
@@ -45,7 +52,7 @@ Status: pre-1.0 (latest tag v0.1.5): no tag has frozen this surface yet. The sur
 - `KEYRYX_WITNESS_TSA_EVERY`
 - held in: `cmd/keyryx/main.go`, `cmd/keyryx/witness.go`, `internal/config/config.go`, `internal/wconfig/wconfig.go`
 
-### http.custody.routes (10)
+### http.custody.routes (8)
 
 - `/healthz`
 - `/v1/state`
@@ -55,8 +62,6 @@ Status: pre-1.0 (latest tag v0.1.5): no tag has frozen this surface yet. The sur
 - `/v1/keys/{name}/sign`
 - `/v1/keys/{name}/challenge`
 - `/v1/keys/{name}/delegate`
-- `/v1/keys/{name}/rotate`
-- `/v1/kids/{kid}/revoke`
 - held in: `internal/api/api.go`
 
 ### http.witness.routes (6)
@@ -68,6 +73,12 @@ Status: pre-1.0 (latest tag v0.1.5): no tag has frozen this surface yet. The sur
 - `/v1/witness/consistency`
 - `/v1/witness/entries`
 - held in: `internal/witnessapi/witnessapi.go`
+
+### socket.custody.admin.routes (2)
+
+- `/v1/keys/{name}/rotate`
+- `/v1/kids/{kid}/revoke`
+- held in: `internal/api/api.go`
 
 ### statement.claims (11)
 

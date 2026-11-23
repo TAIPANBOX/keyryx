@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"math/rand/v2"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/TAIPANBOX/keyryx/internal/announce"
 	"github.com/TAIPANBOX/keyryx/internal/auth"
 	"github.com/TAIPANBOX/keyryx/internal/keystore"
 	"github.com/TAIPANBOX/keyryx/internal/policy"
@@ -28,9 +30,50 @@ import (
 // says to whom.
 
 const (
-	sealSecret  = "record-seal-consumer-key-0123456789"
-	adminSecret = "admin-key-0123456789abcdef"
+	sealSecret = "record-seal-consumer-key-0123456789"
+	// custodyUID is the uid the test custody runs as; an admin request from
+	// it, or from root, is served, from any other uid it is not.
+	custodyUID = 4242
 )
+
+// fakeAnnouncer stands for the outbox: it keeps what it was given, or refuses
+// it when fail is set. got is what a test reads and may reset; all is the
+// outbox's whole history, which Has and Count read.
+type fakeAnnouncer struct {
+	got  []announce.Announcement
+	all  []announce.Announcement
+	fail bool
+}
+
+func (f *fakeAnnouncer) Enqueue(a announce.Announcement) error {
+	if f.fail {
+		return errors.New("the outbox does not take it")
+	}
+	f.got = append(f.got, a)
+	f.all = append(f.all, a)
+	return nil
+}
+
+func (f *fakeAnnouncer) Has(typ, kid string) bool {
+	for _, a := range f.all {
+		if a.Type == typ && a.Data["kid"] == kid {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *fakeAnnouncer) Count(typ, name string) int {
+	n := 0
+	for _, a := range f.all {
+		if a.Type == typ && a.Data["name"] == name {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *fakeAnnouncer) Pending() int { return len(f.all) }
 
 func digest(s string) string {
 	sum := sha256.Sum256([]byte(s))
@@ -40,6 +83,8 @@ func digest(s string) string {
 type stand struct {
 	srv     *Server
 	h       http.Handler
+	admin   http.Handler
+	ann     *fakeAnnouncer
 	logPath string
 	now     time.Time
 }
@@ -71,19 +116,33 @@ func newStand(t *testing.T) *stand {
 		t.Fatalf("the test log did not open: %v", err)
 	}
 	t.Cleanup(func() { _ = ul.Close() })
-	admin, err := auth.ParseAdminKeys(digest(adminSecret))
-	if err != nil {
-		t.Fatal(err)
-	}
+	s.ann = &fakeAnnouncer{}
 	s.srv = &Server{
 		Policy: p, Store: store, Log: ul,
 		Auth:         &auth.Verifier{Policy: p, Now: clock},
-		AdminKeys:    admin,
+		Announce:     s.ann,
+		AdminUID:     custodyUID,
 		PublishAhead: 15 * time.Minute,
 		Now:          clock,
 	}
 	s.h = s.srv.Handler()
+	s.admin = s.srv.AdminHandler()
 	return s
+}
+
+// adm sends one request to the admin mux as the admin listener would: with
+// the peer's uid when uid is not negative, and with no peer at all when it is.
+func (s *stand) adm(t *testing.T, method, path string, uid int) (*httptest.ResponseRecorder, map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest(method, "http://keyryx-admin"+path, nil)
+	if uid >= 0 {
+		req = req.WithContext(WithAdminPeer(context.Background(), uid))
+	}
+	w := httptest.NewRecorder()
+	s.admin.ServeHTTP(w, req)
+	var out map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &out)
+	return w, out
 }
 
 // do sends one request. consumer, when set, marks the request as arriving on
@@ -179,7 +238,7 @@ func TestAConsumerCannotSignWithAKeyItWasNotGranted(t *testing.T) {
 
 func TestAnUnauthenticatedCallerGetsNoSignature(t *testing.T) {
 	s := newStand(t)
-	for name, bearer := range map[string]string{"no credential": "", "a wrong key": "not-a-consumer-key", "the admin key": adminSecret} {
+	for name, bearer := range map[string]string{"no credential": "", "a wrong key": "not-a-consumer-key"} {
 		w, body := s.do(t, "POST", "/v1/keys/trailryx-root/sign", signBody("x", "seal"), "", bearer)
 		if w.Code != http.StatusUnauthorized || body["signature_b64"] != nil {
 			t.Errorf("%s: %d %v", name, w.Code, body)
@@ -284,7 +343,7 @@ func TestTheKeySetPublishesActiveNextAndRetiredButNeverRevoked(t *testing.T) {
 		t.Fatalf("one active key, %d published", len(first))
 	}
 	oldKid := first[0]["kid"].(string)
-	if w, _ := s.do(t, "POST", "/v1/keys/trailryx-root/rotate", "", "", adminSecret); w.Code != http.StatusOK {
+	if w, _ := s.adm(t, "POST", "/v1/keys/trailryx-root/rotate", custodyUID); w.Code != http.StatusOK {
 		t.Fatalf("rotate: %d", w.Code)
 	}
 	if got := jwks(); len(got) != 2 {
@@ -294,7 +353,7 @@ func TestTheKeySetPublishesActiveNextAndRetiredButNeverRevoked(t *testing.T) {
 	if got := jwks(); len(got) != 2 {
 		t.Fatalf("after the switch the retired key must stay published (evidence it signed must keep verifying): %d", len(got))
 	}
-	if w, _ := s.do(t, "POST", "/v1/kids/"+oldKid+"/revoke", "", "", adminSecret); w.Code != http.StatusOK {
+	if w, _ := s.adm(t, "POST", "/v1/kids/"+oldKid+"/revoke", 0); w.Code != http.StatusOK {
 		t.Fatalf("revoke: %d", w.Code)
 	}
 	for _, k := range jwks() {
@@ -307,38 +366,115 @@ func TestTheKeySetPublishesActiveNextAndRetiredButNeverRevoked(t *testing.T) {
 	}
 }
 
-func TestAdminRoutesNeedAnAdminKey(t *testing.T) {
+func TestTheAdminSocketServesOnlyRootOrCustodysOwnUser(t *testing.T) {
 	s := newStand(t)
-	for name, c := range map[string][2]string{
-		"no credential":           {"", ""},
-		"a wrong key":             {"", "not-the-admin"},
-		"a consumer's key":        {"", sealSecret},
-		"a consumer's own socket": {"wardryx", ""},
-	} {
-		if w, _ := s.do(t, "POST", "/v1/keys/wardryx-approval/rotate", "", c[0], c[1]); w.Code != http.StatusUnauthorized {
+	var buf strings.Builder
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	for name, uid := range map[string]int{"no peer credentials": -1, "another user": 1000, "custody's uid plus one": custodyUID + 1, "uid one": 1} {
+		buf.Reset()
+		w, _ := s.adm(t, "POST", "/v1/keys/wardryx-approval/rotate", uid)
+		if w.Code != http.StatusForbidden {
 			t.Errorf("%s: rotate answered %d", name, w.Code)
 		}
+		if strings.Contains(w.Body.String(), "admin_peer") || !strings.Contains(buf.String(), "admin_peer") {
+			t.Errorf("%s: the reason is not in the log alone: answer %s, log %q", name, w.Body, buf.String())
+		}
+		if w, _ := s.adm(t, "POST", "/v1/kids/no-such-kid/revoke", uid); w.Code != http.StatusForbidden {
+			t.Errorf("%s: revoke answered %d", name, w.Code)
+		}
 	}
-	s.srv.AdminKeys = nil
-	if w, _ := s.do(t, "POST", "/v1/keys/wardryx-approval/rotate", "", "", adminSecret); w.Code != http.StatusForbidden {
-		t.Errorf("with no admin keys configured, rotate answered %d", w.Code)
+	if len(s.ann.got) != 0 || len(s.logLines(t)) != 0 {
+		t.Fatalf("a refused admin request changed something: %v", s.ann.got)
 	}
-	s.srv.AdminKeys, _ = auth.ParseAdminKeys(digest(adminSecret))
-	if w, _ := s.do(t, "POST", "/v1/keys/wardryx-approval/rotate", "", "", adminSecret); w.Code != http.StatusOK {
-		t.Fatalf("control: %d", w.Code)
+	if w, _ := s.adm(t, "POST", "/v1/keys/wardryx-approval/rotate", custodyUID); w.Code != http.StatusOK {
+		t.Fatalf("custody's own uid: %d", w.Code)
 	}
-	if w, _ := s.do(t, "POST", "/v1/keys/wardryx-approval/rotate", "", "", adminSecret); w.Code != http.StatusConflict {
-		t.Fatalf("a second rotation while one is pending answered %d", w.Code)
+	if w, _ := s.adm(t, "POST", "/v1/keys/wardryx-approval/rotate", 0); w.Code != http.StatusConflict {
+		t.Fatalf("root, with a rotation pending: %d", w.Code)
 	}
-	if w, _ := s.do(t, "POST", "/v1/kids/no-such-kid/revoke", "", "", adminSecret); w.Code != http.StatusNotFound {
+	if w, _ := s.adm(t, "POST", "/v1/keys/trailryx-root/rotate", 0); w.Code != http.StatusOK {
+		t.Fatalf("root: %d", w.Code)
+	}
+	if w, _ := s.adm(t, "POST", "/v1/kids/no-such-kid/revoke", 0); w.Code != http.StatusNotFound {
 		t.Fatalf("revoking an unknown kid answered %d", w.Code)
 	}
 	lines := s.logLines(t)
-	if len(lines) == 0 || !strings.Contains(lines[len(lines)-1], `"op":"rotate"`) || !strings.Contains(lines[len(lines)-1], `"consumer":"admin:`) {
-		t.Fatalf("a rotation is not on the use log under its admin key's fingerprint: %v", lines)
+	if len(lines) != 2 || !strings.Contains(lines[0], `"consumer":"admin:uid=4242"`) || !strings.Contains(lines[1], `"consumer":"admin:uid=0"`) {
+		t.Fatalf("each rotation is not on the use log under the uid that asked: %v", lines)
 	}
-	if strings.Contains(strings.Join(lines, "\n"), adminSecret) {
-		t.Fatal("the admin key itself reached the log")
+	for _, uid := range []int{0, custodyUID} {
+		if !AdminAllowed(uid, custodyUID) {
+			t.Errorf("uid %d is refused", uid)
+		}
+	}
+	for _, uid := range []int{1, 1000, custodyUID - 1, custodyUID + 1, -1} {
+		if AdminAllowed(uid, custodyUID) {
+			t.Errorf("uid %d is allowed", uid)
+		}
+	}
+}
+
+func TestRotationAndRevocationAreNotServedOverTheNetwork(t *testing.T) {
+	s := newStand(t)
+	for _, p := range []string{"/v1/keys/wardryx-approval/rotate", "/v1/kids/no-such-kid/revoke", "/v1/keys/keyryx.delegation-root/rotate"} {
+		for name, c := range map[string][2]string{
+			"no credential":           {"", ""},
+			"a consumer's key":        {"", sealSecret},
+			"a consumer's own socket": {"wardryx", ""},
+			"anything as a bearer":    {"", "admin"},
+		} {
+			if w, _ := s.do(t, "POST", p, "", c[0], c[1]); w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
+				t.Errorf("POST %s with %s is served over the network: %d", p, name, w.Code)
+			}
+		}
+	}
+	// The admin handlers themselves refuse a request that did not come
+	// through the admin listener, wherever they are mounted.
+	req := httptest.NewRequest("POST", "http://keyryx.test/v1/keys/wardryx-approval/rotate", nil)
+	req = req.WithContext(WithSocketConsumer(context.Background(), "wardryx"))
+	w := httptest.NewRecorder()
+	s.admin.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("the admin mux served a consumer's socket: %d", w.Code)
+	}
+	if len(s.ann.got) != 0 || len(s.logLines(t)) != 0 {
+		t.Fatal("a request over the network changed a key")
+	}
+}
+
+func TestTheAdminRouteTableIsTheAdminMuxAndApartFromTheOther(t *testing.T) {
+	s := newStand(t)
+	admin := AdminRoutes()
+	if len(admin) == 0 {
+		t.Fatal("no admin route is declared, so this test measured nothing")
+	}
+	public := map[string]bool{}
+	for _, r := range Routes() {
+		public[r.Method+" "+r.Pattern] = true
+		if r.Access == "admin" {
+			t.Errorf("%s %s is an admin route in the network table", r.Method, r.Pattern)
+		}
+	}
+	for _, r := range admin {
+		if r.Access != "admin" {
+			t.Errorf("%s %s in the admin table has access %q", r.Method, r.Pattern, r.Access)
+		}
+		if public[r.Method+" "+r.Pattern] {
+			t.Errorf("%s %s is in both tables", r.Method, r.Pattern)
+		}
+		path := strings.NewReplacer("{name}", "nope", "{kid}", "no-such-kid").Replace(r.Pattern)
+		if w, _ := s.adm(t, r.Method, path, 1000); w.Code != http.StatusForbidden {
+			t.Errorf("%s %s is declared and the admin mux does not serve it: %d", r.Method, r.Pattern, w.Code)
+		}
+	}
+	for _, p := range []string{"/healthz", "/v1/state", "/v1/keys", "/v1/jwks/wardryx-approval", "/v1/keys/wardryx-approval/sign"} {
+		for _, m := range []string{"GET", "POST"} {
+			if w, _ := s.adm(t, m, p, 0); w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
+				t.Errorf("%s %s is served on the admin socket though its table does not name it: %d", m, p, w.Code)
+			}
+		}
 	}
 }
 
@@ -362,12 +498,12 @@ func TestTheRouteTableIsTheMux(t *testing.T) {
 			if w.Code >= 400 && !(w.Code == http.StatusNotFound && strings.Contains(r.Pattern, "{kid}")) {
 				t.Errorf("%s %s is public and refused a caller with no credential: %d", r.Method, r.Pattern, w.Code)
 			}
-		case "consumer", "admin":
+		case "consumer":
 			if w.Code != http.StatusUnauthorized {
 				t.Errorf("%s %s needs a credential and answered %d without one", r.Method, r.Pattern, w.Code)
 			}
 		default:
-			t.Errorf("%s %s has access %q, which is none of public, consumer, admin", r.Method, r.Pattern, r.Access)
+			t.Errorf("%s %s has access %q, which is neither public nor consumer", r.Method, r.Pattern, r.Access)
 		}
 	}
 	for _, p := range []string{"/", "/v1", "/v1/keys/wardryx-approval", "/v1/keys/wardryx-approval/private", "/v1/introspect", "/debug/pprof/"} {

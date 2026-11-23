@@ -9,6 +9,8 @@
 //	                 keeps its own append-only log
 //	keyryx verify    checks a witness log or streams and their checkpoints
 //	                 offline, from files only
+//	keyryx admin     rotates a key or revokes a kid through custody's admin
+//	                 socket, as root or custody's own user
 //	keyryx version   prints the version this binary was built as
 //
 // Neither role is on an agent's request path: no enforcement point waits on
@@ -33,6 +35,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/TAIPANBOX/keyryx/internal/announce"
 	"github.com/TAIPANBOX/keyryx/internal/api"
 	"github.com/TAIPANBOX/keyryx/internal/auth"
 	"github.com/TAIPANBOX/keyryx/internal/certify"
@@ -73,6 +76,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return witnessRole(stderr)
 	case "verify":
 		return verify(args[1:], stdout, stderr)
+	case "admin":
+		return admin(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "keyryx: unknown command %q\n", args[0])
 		usage(stderr)
@@ -88,6 +93,7 @@ commands:
   witness   read the record, say when what it saw is gone, keep a signed log
   verify    log --dir D --keys F
             streams --events D --checkpoints D --statements D --roots F
+  admin     rotate NAME | revoke KID, on custody's admin socket (root or custody's user)
   version   print the version
 `)
 }
@@ -131,10 +137,22 @@ func custody(stderr io.Writer) int {
 			return refuse(fmt.Errorf("KEYRYX_DATA: the use log does not take the alarm: %w", err))
 		}
 	}
+	// Every rotation and revocation is announced on the bus, through an
+	// outbox in the data directory (internal/announce, invariant 43). The
+	// stream's directory must be there now; the stream itself is opened by
+	// the delivery loop, because opening it takes its lock, and a lock held
+	// by another writer must not keep custody from coming up.
+	if info, err := os.Stat(filepath.Dir(cfg.Events)); err != nil || !info.IsDir() {
+		return refuse(fmt.Errorf("KEYRYX_EVENTS %s: its directory is not there", cfg.Events))
+	}
+	out, err := announce.Open(cfg.DataDir, func() (announce.Emitter, error) { return announce.OpenBus(cfg.Events, os.Geteuid()) }, time.Now, log.Printf)
+	if err != nil {
+		return refuse(fmt.Errorf("KEYRYX_DATA: %w", err))
+	}
 	srv := &api.Server{
 		Policy: cfg.Policy, Store: store, Certs: certs, Log: ul,
-		Auth:      &auth.Verifier{Policy: cfg.Policy, Issuers: cfg.Issuers, Now: time.Now},
-		AdminKeys: cfg.AdminKeys, PublishAhead: cfg.PublishAhead, Now: time.Now, Version: version,
+		Auth:     &auth.Verifier{Policy: cfg.Policy, Issuers: cfg.Issuers, Now: time.Now},
+		Announce: out, AdminUID: os.Geteuid(), PublishAhead: cfg.PublishAhead, Now: time.Now, Version: version,
 	}
 	handler := srv.Handler()
 
@@ -147,9 +165,20 @@ func custody(stderr io.Writer) int {
 		srv *http.Server
 	}
 	all := []listener{{tcp, newServer(handler, nil)}}
+	// The admin socket: in the data directory, which only custody's user and
+	// root can enter, mode 0600, one request per connection, and every
+	// connection carries the uid the kernel reports for its peer.
+	adminL, err := listenSocket(cfg.AdminSocket, 0o600)
+	if err != nil {
+		_ = tcp.Close()
+		return refuse(fmt.Errorf("KEYRYX_DATA: the admin socket: %w", err))
+	}
+	adminSrv := newServer(srv.AdminHandler(), api.AdminConnContext)
+	adminSrv.SetKeepAlivesEnabled(false)
+	all = append(all, listener{adminL, adminSrv})
 	for _, c := range cfg.Policy.SocketConsumers() {
 		path := filepath.Join(cfg.SocketDir, c.Socket, SocketName)
-		l, err := listenSocket(path)
+		l, err := listenSocket(path, 0o666)
 		if err != nil {
 			for _, x := range all {
 				_ = x.l.Close()
@@ -163,10 +192,12 @@ func custody(stderr io.Writer) int {
 	}
 
 	log.SetOutput(stderr)
-	log.Printf("keyryx custody %s: listening on %s and %d consumer sockets; %d keys held", version, cfg.Addr, len(all)-1, len(cfg.Policy.Keys))
+	log.Printf("keyryx custody %s: listening on %s, %d consumer sockets and the admin socket %s; %d keys held; announcing to %s", version, cfg.Addr, len(all)-2, cfg.AdminSocket, len(cfg.Policy.Keys), cfg.Events)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
+	delivered := make(chan struct{})
+	go func() { out.Run(ctx.Done()); close(delivered) }()
 	failed := make(chan error, len(all))
 	for _, x := range all {
 		go func() {
@@ -187,6 +218,11 @@ func custody(stderr io.Writer) int {
 	for _, x := range all {
 		_ = x.srv.Shutdown(shut)
 	}
+	// The listeners are closed; the delivery loop makes its last attempt and
+	// stops, and only then is the outbox closed.
+	stop()
+	<-delivered
+	_ = out.Close()
 	return code
 }
 
@@ -202,12 +238,13 @@ func newServer(h http.Handler, conn func(context.Context, net.Conn) context.Cont
 	}
 }
 
-// listenSocket listens on a consumer's socket. A socket left by a previous
-// run is replaced; anything else at that path refuses, because custody never
-// removes a file it did not make. The socket itself is open to every user
-// who can reach it: the directory around it, which config checks carries no
-// permission for other, is what decides who can.
-func listenSocket(path string) (net.Listener, error) {
+// listenSocket listens on a socket at path and gives it mode. A socket left by
+// a previous run is replaced; anything else at that path refuses, because
+// custody never removes a file it did not make. A consumer's socket is open to
+// every user who can reach it (0666): the directory around it, which config
+// checks carries no permission for other, is what decides who can. The admin
+// socket is 0600, inside the data directory, and its peer's uid is checked too.
+func listenSocket(path string, mode os.FileMode) (net.Listener, error) {
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSocket == 0 {
 			return nil, fmt.Errorf("%s exists and is not a socket", path)
@@ -220,7 +257,7 @@ func listenSocket(path string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o666); err != nil { // #nosec G302 -- the consumer's directory is the gate; see listenSocket
+	if err := os.Chmod(path, mode); err != nil { // #nosec G302 -- a consumer's directory is its gate; see listenSocket
 		_ = l.Close()
 		return nil, err
 	}

@@ -12,6 +12,11 @@
 // the operator's log (invariant 23). A signature, and a key statement, is
 // answered only once its use is on the use log (invariant 18).
 //
+// Rotation and revocation are not in that table. They are AdminRoutes, served
+// by AdminHandler on custody's admin socket alone, to a peer the kernel says is
+// root or custody's own user (CLAUDE.md invariant 43); no key, bearer or route
+// over the network reaches them.
+//
 // Delegated keys (internal/certify): a consumer granted `delegate` asks for a
 // challenge, answers it with a proof made by its own key, and gets a key
 // statement; the name's key set then publishes the key. The delegation
@@ -27,11 +32,15 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"regexp"
 	"slices"
+	"strconv"
+	"sync"
 	"time"
 
+	"github.com/TAIPANBOX/keyryx/internal/announce"
 	"github.com/TAIPANBOX/keyryx/internal/auth"
 	"github.com/TAIPANBOX/keyryx/internal/certify"
 	"github.com/TAIPANBOX/keyryx/internal/keystore"
@@ -40,8 +49,9 @@ import (
 	"github.com/TAIPANBOX/keyryx/internal/uselog"
 )
 
-// Route is one entry of the route table. Access is public, consumer (a
-// consumer the policy grants the key to) or admin (a KEYRYX_ADMIN_KEYS key).
+// Route is one entry of a route table. Access is public, consumer (a consumer
+// the policy grants the key to) or admin (a peer on the admin socket whose uid
+// is root's or custody's own).
 type Route struct {
 	Method, Pattern, Access string
 }
@@ -55,12 +65,29 @@ var routes = []Route{
 	{"POST", "/v1/keys/{name}/challenge", "consumer"},
 	{"POST", "/v1/keys/{name}/delegate", "consumer"},
 	{"GET", "/v1/statements/{kid}", "public"},
+}
+
+var adminRoutes = []Route{
 	{"POST", "/v1/keys/{name}/rotate", "admin"},
 	{"POST", "/v1/kids/{kid}/revoke", "admin"},
 }
 
-// Routes is the route table: every route this service serves, and only those.
+// Routes is the route table: every route this service serves over TCP and on
+// the consumers' sockets, and only those.
 func Routes() []Route { return slices.Clone(routes) }
+
+// AdminRoutes is the admin socket's route table, and only those.
+func AdminRoutes() []Route { return slices.Clone(adminRoutes) }
+
+// Announcer is where an admin action's announcement goes: the outbox of
+// internal/announce, which answers once the announcement is on disk and leaves
+// the bus to its delivery loop.
+type Announcer interface {
+	Enqueue(announce.Announcement) error
+	Has(typ, kid string) bool
+	Count(typ, name string) int
+	Pending() int
+}
 
 // Server holds what the handlers need.
 type Server struct {
@@ -69,7 +96,9 @@ type Server struct {
 	Certs        *certify.Registry
 	Log          *uselog.Log
 	Auth         *auth.Verifier
-	AdminKeys    [][32]byte
+	Announce     Announcer
+	AdminUID     int
+	adminMu      sync.Mutex // one admin change at a time, so each is announced once
 	PublishAhead time.Duration
 	Now          func() time.Time
 	Version      string
@@ -82,6 +111,33 @@ const MaxBody = 16 << 10
 var purposeRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 type ctxKey struct{}
+
+type peerKey struct{}
+
+// WithAdminPeer marks a connection as arriving on the admin socket from a peer
+// whose uid the kernel reported. Only the admin listener calls it, with the
+// uid read from the socket's peer credentials; the key is unexported, so
+// nothing a client sends can set it.
+func WithAdminPeer(ctx context.Context, uid int) context.Context {
+	return context.WithValue(ctx, peerKey{}, uid)
+}
+
+// AdminConnContext is the admin listener's ConnContext: it carries the uid the
+// kernel reports for the connection's peer, and nothing when there is none, so
+// the admin routes refuse that connection.
+func AdminConnContext(ctx context.Context, c net.Conn) context.Context {
+	if uid, ok := PeerUID(c); ok {
+		return WithAdminPeer(ctx, uid)
+	}
+	return ctx
+}
+
+// AdminAllowed says whether a peer uid may rotate and revoke: root, or the uid
+// custody itself runs as, which can already read the root key and the data
+// directory and so gains nothing by it.
+func AdminAllowed(uid, custody int) bool {
+	return uid == 0 || uid == custody
+}
 
 // WithSocketConsumer marks a connection as arriving on a consumer's own
 // socket. Only the socket listener calls it, with the consumer the policy
@@ -102,11 +158,23 @@ func (s *Server) Handler() http.Handler {
 		"POST /v1/keys/{name}/challenge": s.challenge,
 		"POST /v1/keys/{name}/delegate":  s.delegate,
 		"GET /v1/statements/{kid}":       s.statement,
-		"POST /v1/keys/{name}/rotate":    s.rotate,
-		"POST /v1/kids/{kid}/revoke":     s.revoke,
 	}
+	return build(routes, h)
+}
+
+// AdminHandler is the admin socket's mux, built from AdminRoutes. Every
+// handler in it refuses a request that did not come through the admin
+// listener, so mounting it anywhere else serves nothing.
+func (s *Server) AdminHandler() http.Handler {
+	return build(adminRoutes, map[string]http.HandlerFunc{
+		"POST /v1/keys/{name}/rotate": s.rotate,
+		"POST /v1/kids/{kid}/revoke":  s.revoke,
+	})
+}
+
+func build(table []Route, h map[string]http.HandlerFunc) http.Handler {
 	mux := http.NewServeMux()
-	for _, r := range routes {
+	for _, r := range table {
 		if f, ok := h[r.Method+" "+r.Pattern]; ok {
 			mux.HandleFunc(r.Method+" "+r.Pattern, f)
 		}
@@ -165,17 +233,72 @@ func (s *Server) consumer(r *http.Request) (name, via string, ok bool) {
 	return n, via, ok
 }
 
+// admin says who the admin is, for the use log, or refuses: a request that did
+// not come through the admin listener, a peer that is neither root nor
+// custody's own uid, and a custody with nowhere to announce the change.
 func (s *Server) admin(w http.ResponseWriter, r *http.Request, route string) (string, bool) {
-	if len(s.AdminKeys) == 0 {
-		refuse(w, http.StatusForbidden, route, "admin_disabled")
-		return "", false
-	}
-	fp, ok := auth.Admin(s.AdminKeys, r.Header.Get("Authorization"))
+	uid, ok := r.Context().Value(peerKey{}).(int)
 	if !ok {
-		refuse(w, http.StatusUnauthorized, route, "admin_unknown")
+		refuse(w, http.StatusForbidden, route, "admin_peer_unknown")
 		return "", false
 	}
-	return fp, true
+	if !AdminAllowed(uid, s.AdminUID) {
+		refuse(w, http.StatusForbidden, route, "admin_peer_refused", "uid", strconv.Itoa(uid))
+		return "", false
+	}
+	if s.Announce == nil {
+		refuse(w, http.StatusServiceUnavailable, route, "no_announcer")
+		return "", false
+	}
+	return "uid=" + strconv.Itoa(uid), true
+}
+
+// announce puts an admin action's announcements in the outbox. The key has
+// already changed; a failure here answers 503 and the change stands, as it does
+// for a use-log line that did not write.
+func (s *Server) announce(w http.ResponseWriter, route string, as ...announce.Announcement) bool {
+	for _, a := range as {
+		if err := s.Announce.Enqueue(a); err != nil {
+			refuse(w, http.StatusServiceUnavailable, route, "announce_failed", "type", a.Type, "kid", a.Data["kid"], "error", err.Error())
+			return false
+		}
+	}
+	return true
+}
+
+// record writes an admin change's use-log line and queues its announcements,
+// each whatever the other did, so a failure of one never costs the other; any
+// failure answers 503 and the change stands.
+func (s *Server) record(w http.ResponseWriter, route string, e uselog.Entry, as ...announce.Announcement) bool {
+	logErr := s.Log.Append(e)
+	var annErr error
+	var failed announce.Announcement
+	for _, a := range as {
+		if err := s.Announce.Enqueue(a); err != nil {
+			annErr, failed = err, a
+			break
+		}
+	}
+	switch {
+	case logErr != nil:
+		refuse(w, http.StatusServiceUnavailable, route, "use_log_failed", "key", e.Key, "kid", e.Kid, "error", logErr.Error())
+		return false
+	case annErr != nil:
+		refuse(w, http.StatusServiceUnavailable, route, "announce_failed", "type", failed.Type, "kid", failed.Data["kid"], "error", annErr.Error())
+		return false
+	}
+	return true
+}
+
+// activeKid is the kid a held key signs with now, "" when it has none.
+func (s *Server) activeKid(name string) string {
+	recs, _ := s.Store.Published(name)
+	for _, r := range recs {
+		if r.State == keystore.Active {
+			return r.Kid
+		}
+	}
+	return ""
 }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
@@ -232,7 +355,12 @@ func (s *Server) state(w http.ResponseWriter, _ *http.Request) {
 	if alarms == nil {
 		alarms = []keystore.Alarm{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"role": "custody", "version": s.Version, "root_key": "loaded", "keys": keys, "alarms": alarms})
+	out := map[string]any{"role": "custody", "version": s.Version, "root_key": "loaded", "keys": keys, "alarms": alarms}
+	if s.Announce != nil {
+		// Admin changes the bus has not heard of yet (internal/announce).
+		out["unannounced"] = s.Announce.Pending()
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) inventory(w http.ResponseWriter, _ *http.Request) {
@@ -390,47 +518,86 @@ func publicRecord(r keystore.Record) map[string]any {
 		"created": r.Created, "activate_at": r.ActivateAt, "retired": r.Retired, "revoked": r.Revoked}
 }
 
+// An admin change is made to the key first; then its use-log line is written
+// and its announcement queued, each whatever the other did. An announcement
+// that did not queue, or a process that died
+// before it did, leaves a change the bus has not heard of; asking again heals
+// it: a second rotation of a key with a next key pending announces that next
+// key if the outbox holds nothing for it, and a revocation of a revoked kid
+// announces it if the outbox holds nothing for it. So each change is announced
+// once, by the call that made it or by the next one.
+
 func (s *Server) rotate(w http.ResponseWriter, r *http.Request) {
 	const route = "rotate"
-	fp, ok := s.admin(w, r, route)
+	who, ok := s.admin(w, r, route)
 	if !ok {
 		return
 	}
+	s.adminMu.Lock()
+	defer s.adminMu.Unlock()
 	name := r.PathValue("name")
 	if name == statement.RootName {
-		s.rotateRoot(w, fp)
+		s.rotateRoot(w, who)
 		return
 	}
+	previous := s.activeKid(name)
 	rec, err := s.Store.Rotate(name, s.PublishAhead)
 	switch {
 	case errors.Is(err, keystore.ErrUnknownKey):
 		refuse(w, http.StatusNotFound, route, "key_unknown", "key", name)
 		return
 	case errors.Is(err, keystore.ErrRotationInProgress):
+		if next, ok := s.nextRecord(name); ok && !s.Announce.Has(announce.KeyRotated, next.Kid) {
+			if !s.announce(w, route, announce.Rotated(name, next.Kid, previous, string(next.Alg))) {
+				return
+			}
+			log.Printf("keyryx: the rotation of %s to %s had not been announced; it is now", name, next.Kid)
+		}
 		refuse(w, http.StatusConflict, route, "rotation_in_progress", "key", name)
 		return
 	case err != nil:
 		refuse(w, http.StatusInternalServerError, route, "store_failed", "key", name, "error", err.Error())
 		return
 	}
-	if err := s.Log.Append(uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + fp, Op: "rotate", Key: name, Kid: rec.Kid}); err != nil {
-		refuse(w, http.StatusServiceUnavailable, route, "use_log_failed", "key", name, "error", err.Error())
+	if !s.record(w, route, uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + who, Op: "rotate", Key: name, Kid: rec.Kid},
+		announce.Rotated(name, rec.Kid, previous, string(rec.Alg))) {
 		return
 	}
 	writeJSON(w, http.StatusOK, publicRecord(rec))
 }
 
+// nextRecord is a held key's next key, published and not yet signing.
+func (s *Server) nextRecord(name string) (keystore.Record, bool) {
+	recs, _ := s.Store.Published(name)
+	for _, r := range recs {
+		if r.State == keystore.Next {
+			return r, true
+		}
+	}
+	return keystore.Record{}, false
+}
+
 func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
 	const route = "revoke"
-	fp, ok := s.admin(w, r, route)
+	who, ok := s.admin(w, r, route)
 	if !ok {
 		return
 	}
+	s.adminMu.Lock()
+	defer s.adminMu.Unlock()
 	kid := r.PathValue("kid")
+	// An active key is replaced when it is revoked, and its replacement is a
+	// rotation the bus hears of too.
+	var before keystore.Record
+	for _, rec := range s.Store.Inventory() {
+		if rec.Kid == kid {
+			before = rec
+		}
+	}
 	rec, err := s.Store.Revoke(kid)
 	switch {
 	case errors.Is(err, keystore.ErrUnknownKid) && s.Certs != nil:
-		s.revokeDelegated(w, fp, kid)
+		s.revokeDelegated(w, who, kid)
 		return
 	case errors.Is(err, keystore.ErrUnknownKid):
 		refuse(w, http.StatusNotFound, route, "kid_unknown", "kid", kid)
@@ -439,8 +606,16 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusInternalServerError, route, "store_failed", "kid", kid, "error", err.Error())
 		return
 	}
-	if err := s.Log.Append(uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + fp, Op: "revoke", Key: rec.Name, Kid: rec.Kid}); err != nil {
-		refuse(w, http.StatusServiceUnavailable, route, "use_log_failed", "kid", kid, "error", err.Error())
+	var as []announce.Announcement
+	if !s.Announce.Has(announce.KeyRevoked, kid) {
+		as = append(as, announce.Revoked(rec.Name, rec.Kid, string(rec.Alg)))
+	}
+	if before.State == keystore.Active {
+		if now := s.activeKid(rec.Name); now != "" && now != kid && !s.Announce.Has(announce.KeyRotated, now) {
+			as = append(as, announce.Rotated(rec.Name, now, kid, string(rec.Alg)))
+		}
+	}
+	if !s.record(w, route, uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + who, Op: "revoke", Key: rec.Name, Kid: rec.Kid}, as...) {
 		return
 	}
 	writeJSON(w, http.StatusOK, publicRecord(rec))
@@ -461,28 +636,54 @@ func (s *Server) certs() []certify.Entry {
 }
 
 // rotateRoot rotates both halves of the delegation root together, so a
-// statement is always signed by two halves of one generation.
-func (s *Server) rotateRoot(w http.ResponseWriter, fp string) {
+// statement is always signed by two halves of one generation. The outbox counts
+// each half's rotations: a half that has been rotated fewer times than the
+// other owes one, and only that half is rotated, whether the call that stopped
+// after one half was a minute ago or a day (its next key may be active by now).
+// A half whose owed rotation is already pending is announced if it was not,
+// and with nothing owed and a next key pending the call is a second rotation,
+// refused.
+func (s *Server) rotateRoot(w http.ResponseWriter, who string) {
 	const route = "rotate"
 	halves := []string{statement.RootES384, statement.RootMLDSA}
+	most := 0
 	for _, n := range halves {
-		recs, _ := s.Store.Published(n)
-		for _, rec := range recs {
-			if rec.State == keystore.Next {
-				refuse(w, http.StatusConflict, route, "rotation_in_progress", "key", n)
-				return
-			}
+		most = max(most, s.Announce.Count(announce.KeyRotated, n))
+	}
+	var due []string
+	pending := false
+	for _, n := range halves {
+		_, hasNext := s.nextRecord(n)
+		pending = pending || hasNext
+		if s.Announce.Count(announce.KeyRotated, n) < most && !hasNext {
+			due = append(due, n)
 		}
 	}
+	if len(due) == 0 && pending {
+		// A next key whose rotation was never announced is announced now.
+		for _, n := range halves {
+			if next, ok := s.nextRecord(n); ok && !s.Announce.Has(announce.KeyRotated, next.Kid) {
+				if !s.announce(w, route, announce.Rotated(n, next.Kid, s.activeKid(n), string(next.Alg))) {
+					return
+				}
+			}
+		}
+		refuse(w, http.StatusConflict, route, "rotation_in_progress", "key", statement.RootName)
+		return
+	}
+	if len(due) == 0 {
+		due = halves
+	}
 	var out []map[string]any
-	for _, n := range halves {
+	for _, n := range due {
+		previous := s.activeKid(n)
 		rec, err := s.Store.Rotate(n, s.PublishAhead)
 		if err != nil {
 			refuse(w, http.StatusInternalServerError, route, "store_failed", "key", n, "error", err.Error())
 			return
 		}
-		if err := s.Log.Append(uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + fp, Op: "rotate", Key: n, Kid: rec.Kid}); err != nil {
-			refuse(w, http.StatusServiceUnavailable, route, "use_log_failed", "key", n, "error", err.Error())
+		if !s.record(w, route, uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + who, Op: "rotate", Key: n, Kid: rec.Kid},
+			announce.Rotated(n, rec.Kid, previous, string(rec.Alg))) {
 			return
 		}
 		out = append(out, publicRecord(rec))
@@ -490,7 +691,7 @@ func (s *Server) rotateRoot(w http.ResponseWriter, fp string) {
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
 
-func (s *Server) revokeDelegated(w http.ResponseWriter, fp, kid string) {
+func (s *Server) revokeDelegated(w http.ResponseWriter, who, kid string) {
 	const route = "revoke"
 	st, err := s.Certs.Revoke(kid)
 	switch {
@@ -501,8 +702,11 @@ func (s *Server) revokeDelegated(w http.ResponseWriter, fp, kid string) {
 		refuse(w, http.StatusInternalServerError, route, "registry_failed", "kid", kid, "error", err.Error())
 		return
 	}
-	if err := s.Log.Append(uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + fp, Op: "revoke", Key: st.Name, Kid: st.Kid}); err != nil {
-		refuse(w, http.StatusServiceUnavailable, route, "use_log_failed", "kid", kid, "error", err.Error())
+	var as []announce.Announcement
+	if !s.Announce.Has(announce.KeyRevoked, kid) {
+		as = append(as, announce.Revoked(st.Name, st.Kid, st.JWK.Alg))
+	}
+	if !s.record(w, route, uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + who, Op: "revoke", Key: st.Name, Kid: st.Kid}, as...) {
 		return
 	}
 	_, revoked, _ := s.Certs.Statement(kid)

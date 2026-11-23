@@ -62,10 +62,11 @@ func newDelegationStand(t *testing.T) *stand {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = ul.Close() })
-	admin, _ := auth.ParseAdminKeys(digest(adminSecret))
+	s.ann = &fakeAnnouncer{}
 	s.srv = &Server{Policy: p, Store: store, Certs: certs, Log: ul, Auth: &auth.Verifier{Policy: p, Now: clock},
-		AdminKeys: admin, PublishAhead: 15 * time.Minute, Now: clock}
+		Announce: s.ann, AdminUID: custodyUID, PublishAhead: 15 * time.Minute, Now: clock}
 	s.h = s.srv.Handler()
+	s.admin = s.srv.AdminHandler()
 	return s
 }
 
@@ -334,17 +335,17 @@ func TestTheRootKeySetCarriesBothHalves(t *testing.T) {
 	if got := kinds(); got["EC ES384"] != 1 || got["AKP ML-DSA-65"] != 1 || len(got) != 2 {
 		t.Fatalf("the root key set holds %v, want one ES384 and one ML-DSA-65 key", got)
 	}
-	if w, _ := s.do(t, "POST", "/v1/keys/"+statement.RootName+"/rotate", "", "", adminSecret); w.Code != http.StatusOK {
+	if w, _ := s.adm(t, "POST", "/v1/keys/"+statement.RootName+"/rotate", 0); w.Code != http.StatusOK {
 		t.Fatalf("rotating the root: %d", w.Code)
 	}
 	if got := kinds(); got["EC ES384"] != 2 || got["AKP ML-DSA-65"] != 2 {
 		t.Fatalf("after a rotation the root key set holds %v, want both halves of the active and the next root", got)
 	}
-	if w, _ := s.do(t, "POST", "/v1/keys/"+statement.RootName+"/rotate", "", "", adminSecret); w.Code != http.StatusConflict {
+	if w, _ := s.adm(t, "POST", "/v1/keys/"+statement.RootName+"/rotate", 0); w.Code != http.StatusConflict {
 		t.Fatalf("a second root rotation while one is pending: %d", w.Code)
 	}
-	if w, _ := s.do(t, "POST", "/v1/keys/"+statement.RootName+"/rotate", "", "", ""); w.Code != http.StatusUnauthorized {
-		t.Fatalf("a root rotation with no admin key: %d", w.Code)
+	if w, _ := s.adm(t, "POST", "/v1/keys/"+statement.RootName+"/rotate", 1000); w.Code != http.StatusForbidden {
+		t.Fatalf("a root rotation by another user: %d", w.Code)
 	}
 }
 
@@ -358,10 +359,10 @@ func TestAnAdminRevokesADelegatedKey(t *testing.T) {
 	if !s.jwksKids(t, "vouchryx-token")[k.kid] {
 		t.Fatal("control: the key is not published")
 	}
-	if w, _ := s.do(t, "POST", "/v1/kids/"+k.kid+"/revoke", "", "", vouchryxSecret); w.Code != http.StatusUnauthorized {
+	if w, _ := s.do(t, "POST", "/v1/kids/"+k.kid+"/revoke", "", "", vouchryxSecret); w.Code != http.StatusNotFound && w.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("a consumer revoked a key: %d", w.Code)
 	}
-	if w, _ := s.do(t, "POST", "/v1/kids/"+k.kid+"/revoke", "", "", adminSecret); w.Code != http.StatusOK {
+	if w, _ := s.adm(t, "POST", "/v1/kids/"+k.kid+"/revoke", custodyUID); w.Code != http.StatusOK {
 		t.Fatalf("revoke: %d %s", w.Code, w.Body)
 	}
 	if s.jwksKids(t, "vouchryx-token")[k.kid] {

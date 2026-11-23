@@ -49,7 +49,7 @@ func TestARetirementIsOnTheUseLogAndTheInventoryNamesIt(t *testing.T) {
 	if !strings.Contains(delegate, `"op":"delegate"`) || !strings.Contains(delegate, `"kid":"`+fifth.kid+`"`) {
 		t.Fatalf("the line after it: %s", delegate)
 	}
-	w, _ := s.do(t, "GET", "/v1/keys", "", "", adminSecret)
+	w, _ := s.do(t, "GET", "/v1/keys", "", "", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("inventory: %d %s", w.Code, w.Body)
 	}

@@ -44,12 +44,14 @@ docs or commit messages, as tooling for acting against anyone else.
    `GET /v1/jwks/{name}` and `GET /v1/statements/{kid}` (cached by verifiers),
    `POST /v1/keys/{name}/sign` (an approval granted, a seal, a manifest),
    `POST /v1/keys/{name}/challenge` and `POST /v1/keys/{name}/delegate` (a key
-   renewal, at most every few hours per consumer), `POST /v1/keys/{name}/rotate`
-   and `POST /v1/kids/{kid}/revoke` (an operator). The witness routes are their
-   own table, `witnessapi.Routes`, reads only: `GET /healthz`,
+   renewal, at most every few hours per consumer). `POST /v1/keys/{name}/rotate`
+   and `POST /v1/kids/{kid}/revoke` (an operator) are a table of their own,
+   `api.AdminRoutes`, served only on the admin socket (invariant 43). The
+   witness routes are their own table, `witnessapi.Routes`, reads only: `GET /healthz`,
    `GET /v1/witness/head`, `GET /v1/witness/keys`, `GET /v1/witness/inclusion`,
    `GET /v1/witness/consistency`, `GET /v1/witness/entries`, asked by an auditor
-   or a verifier holding an old head. *(tests: `TestTheRouteTableIsTheMux` and
+   or a verifier holding an old head. *(tests: `TestTheRouteTableIsTheMux`,
+   `TestTheAdminRouteTableIsTheAdminMuxAndApartFromTheOther` and
    `TestTheWitnessRouteTableIsTheMux` hold each table and its mux equal; that no
    route is called per request is held by review)*
 
@@ -70,7 +72,8 @@ docs or commit messages, as tooling for acting against anyone else.
    only wrapped under the root key. *(gate:
    `scripts/private-keys-stay-in-the-store.sh`, every private-key reference in
    `internal/keystore`; tests: `TestNoRouteAnswersWithAPrivateMember` over every
-   route of `api.Routes`, `TestTheStoreNeverWritesAPrivateKeyInTheClear`,
+   route of `api.Routes` and `api.AdminRoutes` and every announcement,
+   `TestTheStoreNeverWritesAPrivateKeyInTheClear`,
    `TestTheJWKCarriesNoPrivateMember`, `TestACertifiedKeyIsNeverHeld`)*
 
 6. **A role that cannot do its job refuses to start.** A key service that came
@@ -83,7 +86,8 @@ docs or commit messages, as tooling for acting against anyone else.
    `TestCustodyRefusesToStartWithoutItsConfiguration`,
    `TestCustodyRefusesWithoutEachRequiredVariableAndAnswersItsHealthPath`,
    `TestEachRequiredVariableIsNamedWhenMissing`, `TestMalformedValuesRefuseTheStart`,
-   `TestAConsumerWhoseWayInIsNotConfiguredRefusesTheStart`)*
+   `TestAConsumerWhoseWayInIsNotConfiguredRefusesTheStart`,
+   `TestANetworkAdminKeyRefusesTheStart`)*
 
 7. **Custody and witness never share a process, a key, a uid or a data
    directory.** A compromise of custody gives the power to sign; the witness,
@@ -189,9 +193,10 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestTheBuiltCustodySignsAndKeepsItsKeysAcrossARestart`)*
 
 23. **A refusal answers its status and nothing else.** The reason goes to the
-    operator's log; admin routes refuse every call when no admin key is
-    configured. *(tests: `TestARefusalNamesItsReasonInTheLogAndNotInTheAnswer`,
-    `TestAdminRoutesNeedAnAdminKey`)*
+    operator's log, and `keyryx admin` prints the status alone. *(tests:
+    `TestARefusalNamesItsReasonInTheLogAndNotInTheAnswer`,
+    `TestTheAdminSocketServesOnlyRootOrCustodysOwnUser`,
+    `TestTheAdminCommandAsksCustodyOnTheSocketInItsDataDirectory`)*
 
 24. **A key statement is signed by both halves of the delegation root and
     verifies only with both.** A JWS in the General JSON Serialization with
@@ -295,7 +300,8 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestVerifyStreamsChecksCheckpointsAgainstTheirStatements`,
     `TestALineLinkedElsewhereIsARestart`, `TestACheckpointFileRewrittenIsReported`,
     `TestACheckpointSignedByAnotherProducersKeyIsInvalid`,
-    `TestACheckpointWaitsWhileCustodyIsUnreachable`)*
+    `TestACheckpointWaitsWhileCustodyIsUnreachable`,
+    `TestARealProducersCheckpointsVerifyThroughARealCustodyAndWitness`)*
 37. **The witness pins the delegation root it first accepts.** The kids of the
     root key set custody first serves are an entry in the witness's own signed
     log (`delegation_root`), and a statement verifies only under those kids,
@@ -427,6 +433,62 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestAKeyLeavesOnDiskBeforeItsReplacementArrives`,
     `TestARetirementIsOnTheUseLogAndTheInventoryNamesIt`; the live run: `labs/five-starts`)*
 
+43. **A key changes only on the machine, and the bus hears of it.**
+    `@decided 2026-11-23`: rotating and revoking a custody key is done only with
+    a command on the machine, through custody's unix socket, by root, with no
+    admin key over the network; a console shows key state read only; each change
+    is announced on the bus. So `api.AdminRoutes` (rotate, revoke) is served on
+    `KEYRYX_DATA/admin.sock` alone, mode 0600 inside the 0700 data directory, one
+    request per connection, to a peer whose uid the kernel reports (SO_PEERCRED)
+    as 0 or custody's own; a request with no peer credentials, or from any other
+    uid, is refused, and every non-Linux build refuses all of them.
+    `KEYRYX_ADMIN_KEYS` set to anything but empty refuses the start.
+    `@claude 2026-11-23`: serving custody's own uid beside root is this
+    repository's reading, open to reversal: that uid can already read the root
+    key and the data directory, so it gains nothing, and without it a container
+    run as non-root (Kubernetes `runAsNonRoot`) has no way to rotate at all.
+    Admin changes are made one at a time: the key first, then its use-log line
+    (`admin:uid=<n>`) and its announcement in the outbox (`internal/announce`),
+    each written whatever the other did, and answered after all three: `key_rotated` (info: `name`, `kid`,
+    `previous_kid`, `alg`) for each new key, a fresh key replacing a revoked
+    active one included, and both halves of a root rotation; `key_revoked`
+    (high: `name`, `kid`, `alg`) for a held or a delegated kid. Each kid is
+    announced once: what the outbox already holds is not announced again, and
+    a change whose announcement did not queue (503, the change stands) is
+    announced by the next ask, a second rotation or revocation. A root half
+    the outbox counts fewer rotations for than the other is the only half a
+    root rotation rotates, so a rotation that stopped after one half is
+    completed, however late. The outbox takes back a failed append, delivers
+    to `KEYRYX_EVENTS` (required; not `keyryx.ndjson`, not inside
+    `KEYRYX_DATA`) in order and at least once, by a loop that opens the stream
+    itself, never following a link, and writes only into the file it opened and
+    checked, a regular file with one link owned by custody's uid (the bus
+    directory is shared, and a link planted or swapped in at the name must not
+    make custody append to its own use log), and tries once more on stop, so a
+    writer holding the bus's lock
+    delays an announcement and never an answer or custody's start. A
+    consumer's renewals and retirements are not announced. *(tests: `TestTheAdminSocketServesOnlyRootOrCustodysOwnUser`,
+    `TestRotationAndRevocationAreNotServedOverTheNetwork`,
+    `TestTheAdminRouteTableIsTheAdminMuxAndApartFromTheOther`,
+    `TestThePeersUIDIsTheKernelsWord`, `TestANetworkAdminKeyRefusesTheStart`,
+    `TestEveryAdminChangeIsAnnounced`, `TestAnAdminRevocationOfADelegatedKeyIsAnnounced`,
+    `TestARenewalOrARetirementIsNotAnnounced`, `TestAHalfFinishedRootRotationIsCompleted`,
+    `TestNoAdminChangeWithoutAnAnnouncer`,
+    `TestAnAdminChangeWhoseAnnouncementDidNotQueueIsHealedByAskingAgain`,
+    `TestAnAdminChangeWhoseUseLogDidNotWriteIsStillAnnounced`,
+    `TestAFailedAppendIsTakenBackAndTheOutboxStillReads`,
+    `TestTheBusIsOpenedByTheDeliveryLoop`, `TestAChangeMadeJustBeforeAStopIsDelivered`,
+    `TestTheBusStreamIsCustodysOwnRegularFile`,
+    `TestHasAndCountReadTheWholeHistory`, `TestACursorWriteLeftBehindIsCleared`,
+    `TestTheStateRouteSaysHowManyChangesWaitForTheBus`,
+    `TestAnAnnouncementIsAnAgentEventFromCustodyOnTheChain`,
+    `TestAnAnnouncementWaitsForTheBusAndSurvivesARestart`,
+    `TestDeliveryStopsAtTheFirstRefusalAndKeepsTheOrder`, `TestEnqueueDoesNotWaitForTheBus`,
+    `TestATornLastLineIsDroppedAndTheOutboxGoesOn`, `TestAnOutboxCustodyDidNotWriteRefusesToOpen`,
+    `TestOnlyTheShapesSpecFixesAreEnqueued`, `TestTheOutboxIsCustodysAlone`,
+    `TestTheAdminCommandRefusesWhatItCannotSend`,
+    `TestTheBuiltCustodyRotatesAndRevokesThroughItsAdminSocketAndTellsTheBus`)*
+
 ## What must never be added without a conversation
 
 - **A route on any request path**: anything a door, a policy decision point or
@@ -442,6 +504,8 @@ docs or commit messages, as tooling for acting against anyone else.
   store (invariant 5).
 - **A sign route for a key the caller was not granted**, or a key set that still
   publishes a revoked key id.
+- **A rotation or revocation reachable over the network**, an admin key or
+  token, or an admin change that is not announced (invariant 43).
 - **Any path that signs caller-chosen bytes with the delegation root**, or a key
   statement issued without a proof of possession (invariants 25 and 26).
 - **Custody and witness in one process** (invariant 7).

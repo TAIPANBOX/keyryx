@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,8 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"crypto/sha256"
-
+	"github.com/TAIPANBOX/keyryx/internal/announce"
 	"github.com/TAIPANBOX/keyryx/internal/api"
 	"github.com/TAIPANBOX/keyryx/internal/auth"
 	"github.com/TAIPANBOX/keyryx/internal/keystore"
@@ -23,13 +23,42 @@ import (
 )
 
 // No route answers with a private member (CLAUDE.md invariant 5), checked over
-// the route table itself: every route api.Routes declares is called, with
+// the route tables themselves: every route api.Routes and api.AdminRoutes
+// declare is called, and every announcement an admin change makes is read, with
 // every credential that could open it, and nothing any of them answers
 // carries a private key in any encoding. A route added to the table and not
 // to this test fails the test, so the check cannot quietly miss one.
+// keptAnnouncements keeps what an admin change would put on the bus, so the
+// leak check reads that too.
+type keptAnnouncements struct{ got []announce.Announcement }
+
+func (k *keptAnnouncements) Enqueue(a announce.Announcement) error {
+	k.got = append(k.got, a)
+	return nil
+}
+
+func (k *keptAnnouncements) Has(typ, kid string) bool {
+	for _, a := range k.got {
+		if a.Type == typ && a.Data["kid"] == kid {
+			return true
+		}
+	}
+	return false
+}
+
+func (k *keptAnnouncements) Count(typ, name string) int {
+	n := 0
+	for _, a := range k.got {
+		if a.Type == typ && a.Data["name"] == name {
+			n++
+		}
+	}
+	return n
+}
+
+func (k *keptAnnouncements) Pending() int { return len(k.got) }
+
 func TestNoRouteAnswersWithAPrivateMember(t *testing.T) {
-	sum := sha256.Sum256([]byte("admin-key-0123456789abcdef"))
-	adminDigest := "sha256:" + hex.EncodeToString(sum[:])
 	p, err := policy.Parse([]byte(`{"version":1,
  "keys":[{"name":"a","alg":"ES256"},{"name":"b","alg":"ES384"},{"name":"c","alg":"ML-DSA-65"}],
  "consumers":[{"name":"w","auth":{"socket":"w"},"grants":{"a":["sign"],"b":["sign"],"c":["sign"]}}]}`))
@@ -50,19 +79,23 @@ func TestNoRouteAnswersWithAPrivateMember(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ul.Close()
-	admin, _ := auth.ParseAdminKeys(adminDigest)
+	ann := &keptAnnouncements{}
 	srv := &api.Server{Policy: p, Store: store, Log: ul, Auth: &auth.Verifier{Policy: p, Now: func() time.Time { return now }},
-		AdminKeys: admin, PublishAhead: time.Minute, Now: func() time.Time { return now }}
-	h := srv.Handler()
+		Announce: ann, PublishAhead: time.Minute, Now: func() time.Time { return now }}
+	h, adminH := srv.Handler(), srv.AdminHandler()
 
-	call := func(method, path, body string, socket bool) []byte {
+	call := func(method, path, body, access string) []byte {
 		req := httptest.NewRequest(method, "http://keyryx.test"+path, strings.NewReader(body))
-		if socket {
+		mux := h
+		switch access {
+		case "consumer":
 			req = req.WithContext(api.WithSocketConsumer(context.Background(), "w"))
+		case "admin":
+			req = req.WithContext(api.WithAdminPeer(context.Background(), 0))
+			mux = adminH
 		}
-		req.Header.Set("Authorization", "Bearer admin-key-0123456789abcdef")
 		w := httptest.NewRecorder()
-		h.ServeHTTP(w, req)
+		mux.ServeHTTP(w, req)
 		if w.Code >= 500 {
 			t.Fatalf("%s %s: %d", method, path, w.Code)
 		}
@@ -71,7 +104,8 @@ func TestNoRouteAnswersWithAPrivateMember(t *testing.T) {
 	stmt := `{"statement_b64":"` + base64.StdEncoding.EncodeToString([]byte("x")) + `","purpose":"leak-test"}`
 	exercised := map[string]bool{}
 	var answers [][]byte
-	for _, r := range api.Routes() {
+	all := append(api.Routes(), api.AdminRoutes()...)
+	for _, r := range all {
 		key := r.Method + " " + r.Pattern
 		for _, name := range []string{"a", "b", "c"} {
 			path := strings.ReplaceAll(r.Pattern, "{name}", name)
@@ -83,14 +117,21 @@ func TestNoRouteAnswersWithAPrivateMember(t *testing.T) {
 			if strings.HasSuffix(r.Pattern, "/sign") {
 				body = stmt
 			}
-			answers = append(answers, call(r.Method, path, body, r.Access == "consumer"))
+			answers = append(answers, call(r.Method, path, body, r.Access))
 			exercised[key] = true
 		}
 	}
 	if len(exercised) == 0 {
 		t.Fatal("api.Routes declares nothing, so this test measured nothing")
 	}
-	for _, r := range api.Routes() {
+	if len(ann.got) == 0 {
+		t.Fatal("no admin change was announced, so the announcements measured nothing")
+	}
+	for _, a := range ann.got {
+		b, _ := json.Marshal(a)
+		answers = append(answers, b)
+	}
+	for _, r := range all {
 		if !exercised[r.Method+" "+r.Pattern] {
 			t.Errorf("%s %s was not exercised", r.Method, r.Pattern)
 		}

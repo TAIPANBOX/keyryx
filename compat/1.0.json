@@ -2,7 +2,7 @@
   "schema": "taipanbox.dev/compat/v1",
   "repo": "TAIPANBOX/keyryx",
   "major": 0,
-  "status": "pre-1.0 (latest tag v0.1.5): no tag has frozen this surface yet. The surface below is what 1.0 will freeze, and scripts/compat-surface.sh holds it on every push, so the 1.0 tag freezes something the gate has already held. TestTheFrozenRoutesAreTheRouteTables holds the two route kinds against the route tables in both directions.",
+  "status": "pre-1.0 (latest tag v0.1.5): no tag has frozen this surface yet. The surface below is what 1.0 will freeze, and scripts/compat-surface.sh holds it on every push, so the 1.0 tag freezes something the gate has already held. TestTheFrozenRoutesAreTheRouteTables holds the three route kinds against the route tables in both directions.",
   "frozen": {
     "http.custody.routes": [
       "/healthz",
@@ -12,7 +12,9 @@
       "/v1/statements/{kid}",
       "/v1/keys/{name}/sign",
       "/v1/keys/{name}/challenge",
-      "/v1/keys/{name}/delegate",
+      "/v1/keys/{name}/delegate"
+    ],
+    "socket.custody.admin.routes": [
       "/v1/keys/{name}/rotate",
       "/v1/kids/{kid}/revoke"
     ],
@@ -24,14 +26,20 @@
       "/v1/witness/consistency",
       "/v1/witness/entries"
     ],
-    "cli.subcommands": ["custody", "witness", "verify", "version"],
+    "cli.subcommands": [
+      "custody",
+      "witness",
+      "verify",
+      "admin",
+      "version"
+    ],
     "env": [
       "KEYRYX_DATA",
       "KEYRYX_ROOT_KEY_FILE",
       "KEYRYX_POLICY",
       "KEYRYX_ADDR",
       "KEYRYX_SOCKET_DIR",
-      "KEYRYX_ADMIN_KEYS",
+      "KEYRYX_EVENTS",
       "KEYRYX_K8S_ISSUERS",
       "KEYRYX_PUBLISH_AHEAD",
       "KEYRYX_WITNESS_DATA",
@@ -75,20 +83,41 @@
       "witness_checkpoint_unsigned",
       "witness_root_equivocated",
       "witness_root_missing"
+    ],
+    "custody.announcements": [
+      "key_rotated",
+      "key_revoked"
     ]
   },
   "where": {
-    "http.custody.routes": ["internal/api/api.go"],
-    "http.witness.routes": ["internal/witnessapi/witnessapi.go"],
-    "cli.subcommands": ["cmd/keyryx/main.go"],
+    "http.custody.routes": [
+      "internal/api/api.go"
+    ],
+    "socket.custody.admin.routes": [
+      "internal/api/api.go"
+    ],
+    "http.witness.routes": [
+      "internal/witnessapi/witnessapi.go"
+    ],
+    "cli.subcommands": [
+      "cmd/keyryx/main.go"
+    ],
     "env": [
       "cmd/keyryx/main.go",
       "cmd/keyryx/witness.go",
       "internal/config/config.go",
       "internal/wconfig/wconfig.go"
     ],
-    "statement.claims": ["internal/statement/statement.go"],
-    "witness.findings": ["internal/witness/witness.go", "cmd/keyryx/main.go"]
+    "statement.claims": [
+      "internal/statement/statement.go"
+    ],
+    "witness.findings": [
+      "internal/witness/witness.go",
+      "cmd/keyryx/main.go"
+    ],
+    "custody.announcements": [
+      "internal/announce/announce.go"
+    ]
   },
   "additive": [
     "A new KEYRYX_ variable that is optional and changes nothing when unset",
