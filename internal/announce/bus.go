@@ -28,7 +28,7 @@ func OpenBus(path string, uid int) (Emitter, error) {
 	const flags = os.O_RDWR | os.O_APPEND | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 	f, err := os.OpenFile(path, flags, 0) // #nosec G304 -- the operator's KEYRYX_EVENTS, held to custody's own file below
 	if errors.Is(err, fs.ErrNotExist) {
-		f, err = os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o640) // #nosec G304 -- as above
+		f, err = os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o640) // #nosec G304 G302 -- the operator's KEYRYX_EVENTS; a bus stream is read by the bus group and holds no secret
 		if err == nil {
 			err = f.Chmod(0o640) // #nosec G302 -- a bus stream is read by the bus group (heraldyx, the witness, agent-conform); it holds no secret
 		}
