@@ -22,12 +22,15 @@ import (
 // the name by then. A file another plane made is not custody's, whatever its
 // name.
 func OpenBus(path string, uid int) (Emitter, error) {
-	const flags = os.O_RDWR | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
+	// O_APPEND is on the description itself, so every write lands at the end
+	// whichever way the writer reaches it: on Linux the descriptor's path opens
+	// the file anew; elsewhere it may share this description.
+	const flags = os.O_RDWR | os.O_APPEND | syscall.O_NOFOLLOW | syscall.O_NONBLOCK
 	f, err := os.OpenFile(path, flags, 0) // #nosec G304 -- the operator's KEYRYX_EVENTS, held to custody's own file below
 	if errors.Is(err, fs.ErrNotExist) {
 		f, err = os.OpenFile(path, flags|os.O_CREATE|os.O_EXCL, 0o640) // #nosec G304 -- as above
 		if err == nil {
-			err = f.Chmod(0o640)
+			err = f.Chmod(0o640) // #nosec G302 -- a bus stream is read by the bus group (heraldyx, the witness, agent-conform); it holds no secret
 		}
 	}
 	if err != nil {

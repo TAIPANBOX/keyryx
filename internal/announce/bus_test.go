@@ -62,13 +62,16 @@ func TestTheBusStreamIsCustodysOwnRegularFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := w.Write(Revoked("k", "z", "ES256").event(t0)); err != nil {
+		t.Fatal(err)
+	}
 	before, _ := os.ReadFile(stream)
 	if err := w.Write(Rotated("k", "b", "a", "ES256").event(t0)); err != nil {
 		t.Fatalf("a write through the descriptor's path: %v", err)
 	}
 	after, _ := os.ReadFile(stream)
-	if len(after) <= len(before) {
-		t.Fatal("the write did not reach custody's stream")
+	if len(after) <= len(before) || !strings.HasPrefix(string(after), string(before)) {
+		t.Fatalf("the write did not land after what custody's stream held: %q then %q", before, after)
 	}
 
 	// A link swapped in at the name after the checks and before the writer
