@@ -39,6 +39,12 @@ Feature: Delegated keys, certified by key statements
     When its ES384 half is checked by the estate's shared token verifier
     Then it verifies and its claims are the statement's, and under a key set without the root it does not
 
+  # @test:TestTheStatementVectorsHold
+  Scenario: The committed statement vectors still mean what they say
+    Given statement vectors this package wrote: a root key set, its pin, two valid statements and nine variants
+    When each is verified under the pinned root
+    Then each valid one verifies and names its key, and each variant is refused, so a second verifier in another repository can be held to the same answers
+
   # @test:TestHostileStatementsNeverParseAndNeverPanic
   Scenario: A damaged statement never parses
     Given named damages to a statement and fifteen hundred random edits of one
