@@ -318,6 +318,42 @@ Feature: An independent witness of the record
     When the witness writes its alerts
     Then they are v1.0 events from keyryx under the witness's subject, with the registered type and band, one chain, and no record content
 
+  # @test:TestAStreamReadForTheFirstTimeDoesNotHoldALineForEveryLine
+  Scenario: A stream read for the first time does not hold a line for every line
+    Given a stream of four hundred thousand chained lines the witness has never read
+    When it reads the stream in one interval
+    Then it raises nothing, reads every line, and holds no more than a few MiB at its peak, remembering only the lines a pending checkpoint names
+
+  # @test:TestPendingCheckpointsAreAnsweredFromTheReadItself
+  Scenario: Pending checkpoints are answered from the read itself
+    Given a stream and three checkpoint records the witness has not read
+    When it reads them in one interval
+    Then it accepts all three without reading the stream again from byte zero
+
+  # @test:TestAStreamWithNoChainRaisesABoundedNumberOfFindings
+  Scenario: A stream with no chain raises a bounded number of findings
+    Given a stream of twenty thousand lines written with no prev_hash
+    When the witness reads it
+    Then it raises eight restart findings one by one and one more that counts the rest, high, and its own log stays small
+
+  # @test:TestAnUnexplainedRestartIsNeverHiddenBehindExplainedOnes
+  Scenario: An unexplained restart is never hidden behind explained ones
+    Given nine restarts a resume record explains, more than are raised one by one, then one nothing explains
+    When the witness reads the stream
+    Then the finding that counts the rest is high and counts the one unexplained restart
+
+  # @test:TestALineLongerThanTheBoundIsHashedNotHeld
+  Scenario: A line longer than the bound is hashed, not held
+    Given a stream with a 40 MiB line, and later a 10 MiB final line with no LF that gets its LF afterwards
+    When the witness reads it each time
+    Then it holds a few MiB at most, counts and hashes every byte, takes no torn line, and raises nothing once the LF arrives
+
+  # @test:TestCheckpointsLeftBehindAreAnsweredInOnePass
+  Scenario: Checkpoints left behind are answered in one pass
+    Given five checkpoint records that waited while custody did not answer, and a stream read on past them
+    When custody answers again
+    Then all five are accepted with at most one read of the stream from byte zero
+
   # @test:TestHostileStreamsNeverPanic
   Scenario: Hostile streams never stop the witness
     Given sixty rounds of random bytes in a stream, its checkpoint file and the record directory

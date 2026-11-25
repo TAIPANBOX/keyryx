@@ -271,11 +271,25 @@ docs or commit messages, as tooling for acting against anyone else.
     accepted checkpoint's N on the way; a stream over `KEYRYX_WITNESS_FULL_BYTES`
     is hashed from zero every `KEYRYX_WITNESS_FULL_INTERVAL` and forward in
     between, and the log says which. Its state is its log, so a rewrite made
-    while it was down is caught on its first read. *(tests:
+    while it was down is caught on its first read. What a read holds does not
+    grow with the stream: bytes are hashed as they pass, a line over `MaxLine`
+    is hashed in pieces and never held (a torn one is taken back out of the
+    hash), only the lines the pending checkpoint records name are remembered
+    (at most `MaxWanted` records an interval; those behind the read are
+    answered in one pass from byte zero), and one read raises at most
+    `MaxRestartFindings` restart findings per stream one by one and one more
+    counting the rest (`more_restarts`, `unexplained_restarts`), high when any
+    of the rest is unexplained. *(tests:
     `TestARewriteOfAnyByteItSawIsCaught`, `TestAStreamThatShrankIsCaught`,
     `TestAForwardIntervalReadsOnlyNewBytesAndAFullOneReadsAll`,
     `TestTheWitnessSurvivesARestartAndCatchesARewriteMadeWhileItWasDown`,
-    `TestAnHonestStreamIsWitnessedAndRaisesNothing`, `TestHostileStreamsNeverPanic`)*
+    `TestAnHonestStreamIsWitnessedAndRaisesNothing`, `TestHostileStreamsNeverPanic`,
+    `TestAStreamReadForTheFirstTimeDoesNotHoldALineForEveryLine`,
+    `TestAStreamWithNoChainRaisesABoundedNumberOfFindings`,
+    `TestPendingCheckpointsAreAnsweredFromTheReadItself`,
+    `TestAnUnexplainedRestartIsNeverHiddenBehindExplainedOnes`,
+    `TestALineLongerThanTheBoundIsHashedNotHeld`,
+    `TestCheckpointsLeftBehindAreAnsweredInOnePass`)*
 
 32. **A checkpoint is checked by SPEC 6.5.1 format v1, step by step.** Its
     own RFC 8785 form and nothing else; its signature under a key a statement
