@@ -513,13 +513,19 @@ docs or commit messages, as tooling for acting against anyone else.
     `KEYRYX_STATEMENTS_DIR` set (refused unless a real directory owned by
     custody's uid, writable by nobody else, apart from `KEYRYX_DATA` and the
     bus's directory), custody keeps in it `delegation-root.jwks.json`, the
-    bytes `GET /v1/jwks/keyryx.delegation-root` serves, and for every delegated
+    bytes `GET /v1/jwks/keyryx.delegation-root` serves (refused too when it
+    holds the root key file or the consumers' sockets; paths compared after
+    links are followed), and for every delegated
     key `<kid>.json`, `{statement, revoked_at}` as `GET /v1/statements/{kid}`
     serves them; nothing else, and nothing from the store. Every write goes
     through the open directory (`os.Root`), to a new file synced, mode 0644,
     renamed over the old, and is of the registry's state when it is made, so an
     older state never lands after a newer one. A start removes temporary files,
-    refuses a name custody never writes, and writes everything. A revocation and
+    refuses a name custody never writes, refuses a copy custody's data cannot
+    have written (a kid it does not know, a revocation it does not hold: its
+    data is older than what it published, restored over it), and writes
+    everything. Every admin call that touches the root marks its key set to be
+    copied again however the call ends. A revocation and
     a change of the root are written as a step of the admin change of invariant
     43, tried whatever the other steps did, and answer 503 when the copy failed
     (the change stands); a certification is copied soon after its answer, which
@@ -529,7 +535,9 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestOpenBringsTheDirectoryToCustodysState`,
     `TestOpenRefusesADirectoryHoldingWhatCustodyNeverWrites`,
     `TestAWriteIsOfTheStateAsItStandsNotOneQueuedEarlier`,
-    `TestAFailedWriteWaitsAndIsTriedAgain`, `TestOnlyAKidNamesAFile`, in
+    `TestAFailedWriteWaitsAndIsTriedAgain`, `TestOnlyAKidNamesAFile`,
+    `TestAStartOverCopiesNewerThanCustodysDataRefuses`,
+    `TestMarksWritesAndFlushesTogetherLeaveTheLatestState`, in
     `internal/export`; `TestACertificationIsMarkedForTheReadersCopy`,
     `TestARevocationOfADelegatedKeyIsCopiedAsPartOfTheChange`,
     `TestARevocationWhoseCopyFailedAnswers503AndStands`,

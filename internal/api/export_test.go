@@ -14,10 +14,11 @@ import (
 // certification soon after its answer.
 
 type fakeExporter struct {
-	kids   []string
-	roots  int
-	marked []string
-	fail   bool
+	kids      []string
+	roots     int
+	marked    []string
+	rootMarks int
+	fail      bool
 }
 
 func (f *fakeExporter) Kid(kid string) error {
@@ -37,6 +38,7 @@ func (f *fakeExporter) Root() error {
 }
 
 func (f *fakeExporter) Mark(kid string) { f.marked = append(f.marked, kid) }
+func (f *fakeExporter) MarkRoot()       { f.rootMarks++ }
 func (f *fakeExporter) Unexported() int { return len(f.marked) }
 
 func TestACertificationIsMarkedForTheReadersCopy(t *testing.T) {
@@ -117,6 +119,16 @@ func TestAChangeOfTheRootRewritesItsKeySetForTheReader(t *testing.T) {
 	s.now = s.now.Add(20 * 60e9)
 	if w, _ := s.adm(t, "POST", "/v1/keys/"+statement.RootName+"/rotate", 0); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("a root rotation whose copy failed: %d", w.Code)
+	}
+	// Every call that touched the root, however it ended, marks its set to
+	// be copied again: the rotations, the half revoked, and a second
+	// rotation refused while one is pending.
+	marks := fx.rootMarks
+	if w, _ := s.adm(t, "POST", "/v1/keys/"+statement.RootName+"/rotate", 0); w.Code != http.StatusConflict || fx.rootMarks != marks+1 {
+		t.Fatalf("a refused second rotation: %d, marks %d -> %d", w.Code, marks, fx.rootMarks)
+	}
+	if marks < 3 {
+		t.Fatalf("the root set was marked %d times over three changes", marks)
 	}
 }
 

@@ -89,6 +89,7 @@ type Exporter interface {
 	Kid(kid string) error
 	Root() error
 	Mark(kid string)
+	MarkRoot()
 	Unexported() int
 }
 
@@ -643,6 +644,12 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
 			before = rec
 		}
 	}
+	if s.Export != nil && (before.Name == statement.RootES384 || before.Name == statement.RootMLDSA) {
+		// Whatever the store did, and however this answer ends, the root
+		// key set is copied again soon: a half it revoked and then failed
+		// to replace must not stay in the reader's copy.
+		defer s.Export.MarkRoot()
+	}
 	rec, err := s.Store.Revoke(kid)
 	switch {
 	case errors.Is(err, keystore.ErrUnknownKid) && s.Certs != nil:
@@ -704,6 +711,12 @@ func (s *Server) certs() []certify.Entry {
 // refused.
 func (s *Server) rotateRoot(w http.ResponseWriter, who string) {
 	const route = "rotate"
+	if s.Export != nil {
+		// Whichever way this ends (a half rotated and the next failed, a
+		// use-log line that did not write, a second rotation refused), the
+		// root key set is copied again soon.
+		defer s.Export.MarkRoot()
+	}
 	halves := []string{statement.RootES384, statement.RootMLDSA}
 	most := 0
 	for _, n := range halves {

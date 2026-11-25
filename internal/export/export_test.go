@@ -79,7 +79,7 @@ func TestCheckRefusesADirectoryCustodyMustNotWrite(t *testing.T) {
 	}
 	uid := os.Geteuid()
 	avoid := []string{data, events}
-	if err := Check(good, uid, avoid); err != nil {
+	if err := Check(good, uid, avoid, nil); err != nil {
 		t.Fatalf("a directory of custody's own: %v", err)
 	}
 	link := filepath.Join(base, "link")
@@ -107,9 +107,89 @@ func TestCheckRefusesADirectoryCustodyMustNotWrite(t *testing.T) {
 		"a path that is not clean":     {good + "/../statements", uid},
 		"nothing there":                {filepath.Join(base, "absent"), uid},
 	} {
-		if err := Check(c.dir, c.uid, avoid); err == nil {
+		if err := Check(c.dir, c.uid, avoid, nil); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	// A path to custody's data through a link is custody's data.
+	viaLink := filepath.Join(base, "via")
+	_ = os.Symlink(data, viaLink)
+	if err := Check(good, uid, []string{filepath.Join(viaLink)}, nil); err != nil {
+		t.Fatalf("control: a link to data elsewhere: %v", err)
+	}
+	inData := filepath.Join(viaLink, "pub")
+	_ = os.Mkdir(filepath.Join(data, "pub"), 0o755)
+	if err := Check(inData, uid, []string{data}, nil); err == nil {
+		t.Error("a directory inside custody's data reached through a link was accepted")
+	}
+	if err := Check(filepath.Join(data, "pub"), uid, []string{viaLink}, nil); err == nil {
+		t.Error("a directory inside custody's data, the data named through a link, was accepted")
+	}
+	// A directory holding the root key file or the consumers' sockets.
+	key := filepath.Join(good, "root.key")
+	_ = os.WriteFile(key, nil, 0o400)
+	if err := Check(good, uid, avoid, []string{key}); err == nil {
+		t.Error("a directory holding the root key file was accepted")
+	}
+	if err := Check(good, uid, avoid, []string{filepath.Join(base, "root.key")}); err != nil {
+		t.Errorf("a root key file beside the directory: %v", err)
+	}
+}
+
+func TestAStartOverCopiesNewerThanCustodysDataRefuses(t *testing.T) {
+	d := dir(t)
+	src := newSource()
+	e, err := Open(d, src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = e.Close()
+	// Custody's data restored from before kid B was revoked.
+	older := newSource()
+	delete(older.revoked, kidB)
+	if e, err := Open(d, older, nil); err == nil {
+		_ = e.Close()
+		t.Fatal("a start over a revocation its data no longer holds")
+	}
+	// Custody's data restored from before kid A was certified.
+	older = newSource()
+	delete(older.stmts, kidA)
+	if e, err := Open(d, older, nil); err == nil {
+		_ = e.Close()
+		t.Fatal("a start over a copy for a key its data does not know")
+	}
+	if e, err := Open(d, newSource(), nil); err != nil {
+		t.Fatalf("control: the same state again: %v", err)
+	} else {
+		_ = e.Close()
+	}
+}
+
+func TestMarksWritesAndFlushesTogetherLeaveTheLatestState(t *testing.T) {
+	d := dir(t)
+	src := newSource()
+	e, err := Open(d, src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(3)
+		go func() { defer wg.Done(); e.Mark(kidA); e.MarkRoot() }()
+		go func() { defer wg.Done(); _ = e.Kid(kidA); _ = e.Root() }()
+		go func() { defer wg.Done(); e.Flush() }()
+	}
+	src.mu.Lock()
+	src.revoked[kidA] = 2000000000
+	src.mu.Unlock()
+	wg.Wait()
+	e.Flush()
+	if _, rev := readKid(t, d, kidA); rev != 2000000000 {
+		t.Fatalf("after writes in every order the copy says revoked_at %d", rev)
+	}
+	if e.Unexported() != 0 {
+		t.Fatalf("%d still wait", e.Unexported())
 	}
 }
 

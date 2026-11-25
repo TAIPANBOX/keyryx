@@ -69,9 +69,12 @@ type Exporter struct {
 
 // Check refuses a directory custody must not write: anything but a real
 // directory, one owned by another uid, one its group or other users can write,
-// and one that is, contains or is inside a directory named in avoid
-// (custody's data directory, the directory of its event stream).
-func Check(dir string, uid int, avoid []string) error {
+// one that is, contains or is inside a directory named in avoid (custody's
+// data directory, the directory of its event stream), and one that holds a
+// path named in private (the root key file, the consumers' sockets), which a
+// reader mounting the directory would then see. Paths are compared after
+// links are followed.
+func Check(dir string, uid int, avoid, private []string) error {
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 		return fmt.Errorf("%q is not a clean absolute path", dir)
 	}
@@ -89,13 +92,32 @@ func Check(dir string, uid int, avoid []string) error {
 	if !ok || int(st.Uid) != uid {
 		return fmt.Errorf("%s does not belong to custody's uid %d", dir, uid)
 	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
 	for _, a := range avoid {
 		if a == "" {
 			continue
 		}
-		a = filepath.Clean(a)
-		if within(dir, a) || within(a, dir) {
+		ra := filepath.Clean(a)
+		if r, err := filepath.EvalSymlinks(a); err == nil {
+			ra = r
+		}
+		if within(real, ra) || within(ra, real) {
 			return fmt.Errorf("%s overlaps %s, which is not a directory to publish into", dir, a)
+		}
+	}
+	for _, p := range private {
+		if p == "" {
+			continue
+		}
+		rp := filepath.Clean(p)
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			rp = r
+		}
+		if within(rp, real) {
+			return fmt.Errorf("%s holds %s, which a reader mounting it must not see", dir, p)
 		}
 	}
 	return nil
@@ -133,6 +155,10 @@ func Open(dir string, src Source, logf func(string, ...any)) (*Exporter, error) 
 			}
 		case name == RootFile && de.Type().IsRegular():
 		case strings.HasSuffix(name, ".json") && KidRe.MatchString(strings.TrimSuffix(name, ".json")) && de.Type().IsRegular():
+			if err := e.agrees(strings.TrimSuffix(name, ".json")); err != nil {
+				_ = root.Close()
+				return nil, fmt.Errorf("%s: %w", dir, err)
+			}
 		default:
 			_ = root.Close()
 			return nil, fmt.Errorf("%s holds %q, which custody never writes; it publishes into a directory of its own", dir, name)
@@ -149,6 +175,34 @@ func Open(dir string, src Source, logf func(string, ...any)) (*Exporter, error) 
 		}
 	}
 	return e, nil
+}
+
+// agrees refuses a copy custody's state cannot have written: one for a kid the
+// registry does not hold, or one that says revoked where the registry does
+// not. Either means custody's data is older than what it published, a copy
+// restored over it, and custody does not start over that: whoever reads the
+// directory would see a key custody can no longer revoke, or a revocation
+// taken back.
+func (e *Exporter) agrees(kid string) error {
+	raw, revoked, ok := e.src.Statement(kid)
+	_ = raw
+	if !ok {
+		return fmt.Errorf("it holds a copy for %s, a key custody's data does not know; custody's data is older than what it published", kid)
+	}
+	b, err := e.root.ReadFile(kid + ".json")
+	if err != nil {
+		return err
+	}
+	var v struct {
+		RevokedAt int64 `json:"revoked_at"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return fmt.Errorf("its copy for %s does not read: %w", kid, err)
+	}
+	if v.RevokedAt != 0 && revoked == 0 {
+		return fmt.Errorf("its copy for %s says revoked and custody's data does not; custody's data is older than what it published", kid)
+	}
+	return nil
 }
 
 // Root writes the root key set now. On failure it stays to be written by Run.
@@ -205,6 +259,17 @@ func (e *Exporter) Kid(kid string) error {
 		return fmt.Errorf("export: %s: %w", kid, err)
 	}
 	return nil
+}
+
+// MarkRoot asks for the root key set to be written by Run, soon.
+func (e *Exporter) MarkRoot() {
+	e.dirtyMu.Lock()
+	e.rootDirty = true
+	e.dirtyMu.Unlock()
+	select {
+	case e.kick <- struct{}{}:
+	default:
+	}
 }
 
 // Mark asks for a key's file to be written by Run, soon.

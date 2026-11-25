@@ -8,7 +8,7 @@ Feature: Custody publishes what it certified into a directory a reader mounts
 
   # @test:TestCheckRefusesADirectoryCustodyMustNotWrite
   Scenario: Custody publishes only into a directory of its own, apart
-    Given a link, a file, a directory its group writes, another uid's, one inside or around custody's data or the bus, a relative or unclean path, and nothing there
+    Given a link, a file, a directory its group writes, another uid's, one inside or around custody's data or the bus (also through a link), one holding the root key file, a relative or unclean path, and nothing there
     When custody checks each as its publishing directory
     Then each is refused and a directory of its own is accepted
 
@@ -23,6 +23,18 @@ Feature: Custody publishes what it certified into a directory a reader mounts
     Given a foreign file, a link at a kid's name, a directory, or a name that is no kid
     When custody opens the directory
     Then it refuses
+
+  # @test:TestAStartOverCopiesNewerThanCustodysDataRefuses
+  Scenario: A start over copies newer than custody's data refuses
+    Given published copies, and custody's data restored from before a revocation, or from before a certification
+    When custody starts over the directory
+    Then it refuses each, and starts over the same state
+
+  # @test:TestMarksWritesAndFlushesTogetherLeaveTheLatestState
+  Scenario: Marks, writes and flushes together leave the latest state
+    Given marks, writes and flushes of one key and the root at once, and the key revoked meanwhile
+    When they all end and a last flush runs
+    Then the copy carries the revocation and nothing waits
 
   # @test:TestAWriteIsOfTheStateAsItStandsNotOneQueuedEarlier
   Scenario: A copy is of the state as it stands when it is written
@@ -63,8 +75,8 @@ Feature: Custody publishes what it certified into a directory a reader mounts
   # @test:TestAChangeOfTheRootRewritesItsKeySetForTheReader
   Scenario: A change of the root rewrites its key set for the reader
     Given custody publishing copies
-    When an admin rotates the root, revokes a half of it, and revokes another held key, and later rotates with a copy that fails
-    Then the root set is written for the root's changes and not for the other key, and the failed copy answers 503
+    When an admin rotates the root, revokes a half of it, and revokes another held key, later rotates with a copy that fails, then asks for a second rotation
+    Then the root set is written for the root's changes and not for the other key, the failed copy answers 503, and every call that touched the root marks its set to be copied again
 
   # @test:TestTheRootSetIsWhatTheKeySetRouteServes
   Scenario: The root set copied is what the key set route serves

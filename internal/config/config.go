@@ -135,7 +135,8 @@ func FromEnv() (Config, error) {
 	// reader on this machine that may open no connection (heraldyx). A
 	// directory of custody's own, apart from its data and from the bus.
 	if c.Statements = os.Getenv("KEYRYX_STATEMENTS_DIR"); c.Statements != "" {
-		if err := export.Check(c.Statements, os.Geteuid(), []string{c.DataDir, filepath.Dir(c.Events)}); err != nil {
+		if err := export.Check(c.Statements, os.Geteuid(), []string{c.DataDir, filepath.Dir(c.Events)},
+			[]string{rootPath, os.Getenv("KEYRYX_SOCKET_DIR")}); err != nil {
 			return c, fmt.Errorf("KEYRYX_STATEMENTS_DIR: %w", err)
 		}
 	}
