@@ -206,6 +206,7 @@ docs or commit messages, as tooling for acting against anyone else.
     rotate together. *(tests: `TestAStatementVerifiesOnlyWithBothHalvesOfItsRoot`,
     `TestTheStatementsClassicalHalfVerifiesWithAgentStackGo`,
     `TestHostileStatementsNeverParseAndNeverPanic`, `TestTheRootKeySetCarriesBothHalves`,
+    `TestTheStatementVectorsHold`,
     `TestTheBuiltCustodyCertifiesADelegatedKeyAndKeepsItAcrossARestart`)*
 
 25. **The delegation root signs nothing a request chose.** It lives in the
