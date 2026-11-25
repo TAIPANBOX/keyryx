@@ -2,3 +2,4 @@
 *.pem
 *.key
 /dist/
+.DS_Store

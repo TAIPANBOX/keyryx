@@ -43,6 +43,7 @@ package witness
 import (
 	"bufio"
 	"crypto/sha256"
+	"encoding"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -55,6 +56,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/TAIPANBOX/agent-stack-go/v2/event"
@@ -379,11 +381,25 @@ func sortedCopy(in []string) []string {
 	return out
 }
 
+// oversized is what a checkpoint file's last record is remembered as when it
+// was a line longer than any record: no record's `prev` names it.
+const oversized = "oversized"
+
+// MaxRestartFindings bounds the chain_restarted findings one read of one stream
+// raises: a stream written with no prev_hash restarts at every line, and one
+// finding per line would be a flood in the witness's own log. The last one
+// raised counts the rest (`more_restarts`).
+const MaxRestartFindings = 8
+
 // lineView answers what the stream holds at a line count from what this read
 // saw, and by reading the stream again for a line before it.
+//
+// The read remembers only the lines a pending checkpoint names (wanted): a line
+// remembered for every line read grows with the stream, and a first read of a
+// bus that was never rotated is millions of lines.
 type lineView struct {
 	st     *streamState
-	window []checkpoint.LineAt
+	window map[int64]checkpoint.LineAt
 	path   string
 }
 
@@ -391,44 +407,168 @@ func (v lineView) At(count int64) (checkpoint.LineAt, bool) {
 	if count < 1 || count > v.st.lines {
 		return checkpoint.LineAt{}, false
 	}
-	if n := len(v.window); n > 0 && count >= v.window[0].Count {
-		return v.window[count-v.window[0].Count], true
+	if l, ok := v.window[count]; ok {
+		return l, true
 	}
 	return lineAt(v.path, count)
 }
 
+// MaxWanted bounds the line counts one read remembers for the stream's pending
+// checkpoint records; a record past it is answered by reading the stream again
+// (lineAt), which costs time and no memory.
+const MaxWanted = 1 << 16
+
+// pending is what the stream's checkpoint records not yet read name, read
+// ahead of the stream so the stream's read keeps only those lines: every
+// count a record names (at most MaxWanted records), and the counts of the
+// `resume` records among them. It reads the checkpoint file from where the
+// last read stopped and changes nothing: checkpoints() reads and judges the
+// same records after, and reads no more of them in one interval than this
+// collected.
+type pending struct {
+	counts  map[int64]bool
+	resumes map[int64]bool
+	records int
+}
+
+func (w *Witness) pending(name string, st *streamState) pending {
+	out := pending{counts: map[int64]bool{}, resumes: map[int64]bool{}}
+	if w.cfg.Checkpoints == "" {
+		return out
+	}
+	f, err := os.Open(filepath.Join(w.cfg.Checkpoints, name+".ckpt.ndjson")) // #nosec G304 -- a checkpoint file in the directory the operator named
+	if err != nil {
+		return out
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || info.Size() < st.ckptBytes {
+		return out // shrunk: checkpoints() starts it over and reads no record
+	}
+	if _, err := f.Seek(st.ckptBytes, io.SeekStart); err != nil {
+		return out
+	}
+	r := bufio.NewReaderSize(f, 64<<10)
+	for out.records < MaxWanted {
+		line, _, err := nextLine(r, nil, checkpoint.MaxRecord)
+		if err != nil {
+			break
+		}
+		out.records++
+		if line == nil {
+			continue
+		}
+		if rec, err := checkpoint.ParseRecord(line[:len(line)-1]); err == nil {
+			out.counts[rec.Count] = true
+			if rec.Kind == "resume" {
+				out.resumes[rec.Count] = true
+			}
+		}
+	}
+	return out
+}
+
+// rereads counts the reads of a stream from byte zero made to answer a line
+// count, for the tests that hold a read to answering from what it read.
+var rereads atomic.Int64
+
 // lineAt reads a stream from byte zero to its count-th line.
 func lineAt(path string, count int64) (checkpoint.LineAt, bool) {
+	got := linesAt(path, map[int64]bool{count: true})
+	l, ok := got[count]
+	return l, ok
+}
+
+// linesAt reads a stream once from byte zero and returns what it holds at each
+// of counts: one pass, however many counts.
+func linesAt(path string, counts map[int64]bool) map[int64]checkpoint.LineAt {
+	out := map[int64]checkpoint.LineAt{}
+	if len(counts) == 0 {
+		return out
+	}
+	rereads.Add(1)
+	last := int64(0)
+	for c := range counts {
+		last = max(last, c)
+	}
 	f, err := os.Open(path) // #nosec G304 -- a stream in the events directory the operator named
 	if err != nil {
-		return checkpoint.LineAt{}, false
+		return out
 	}
 	defer f.Close()
 	h := sha256.New()
 	r := bufio.NewReaderSize(f, 64<<10)
 	var n, end int64
-	for {
-		line, err := readLine(r)
+	for n < last {
+		line, size, err := nextLine(r, h, MaxLine)
 		if err != nil {
-			return checkpoint.LineAt{}, false
+			return out
 		}
-		h.Write(line)
-		n, end = n+1, end+int64(len(line))
-		if n == count {
-			head, _ := event.ChainHashRaw(line[:len(line)-1])
-			return checkpoint.LineAt{Count: n, End: end, Prefix: checkpoint.SumOf(h), Head: head}, true
+		n, end = n+1, end+size
+		head := ""
+		if line != nil {
+			h.Write(line)
+			head, _ = event.ChainHashRaw(line[:len(line)-1])
+		}
+		if counts[n] {
+			out[n] = checkpoint.LineAt{Count: n, End: end, Prefix: checkpoint.SumOf(h), Head: head}
 		}
 	}
+	return out
 }
 
-// readLine reads one LF-terminated line, LF included; a final line with no LF
-// is io.EOF, never a line.
-func readLine(r *bufio.Reader) ([]byte, error) {
-	line, err := r.ReadBytes('\n')
-	if err != nil {
-		return nil, io.EOF
+// nextLine reads one LF-terminated line. A line no longer than limit (its LF
+// not counted) is returned whole, LF included, and not written to h: the
+// caller writes it. A longer line is never held: it is written to h in pieces
+// as it is read (when h is not nil) and returned as nil, with its length. A
+// final line with no LF is io.EOF, never a line, and leaves h as it found it.
+func nextLine(r *bufio.Reader, h hash.Hash, limit int) ([]byte, int64, error) {
+	var held []byte
+	var size int64
+	var saved []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		size += int64(len(chunk))
+		switch {
+		case err == nil && held != nil && size <= int64(limit)+1:
+			return append(held, chunk...), size, nil
+		case err == nil && held == nil && saved == nil && size <= int64(limit)+1:
+			return append([]byte(nil), chunk...), size, nil
+		case err == nil:
+			// Over the bound on its last piece: what was held so far is
+			// part of the line too.
+			if h != nil {
+				h.Write(held)
+				h.Write(chunk)
+			}
+			return nil, size, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			if saved == nil && held == nil && h != nil {
+				if m, ok := h.(encoding.BinaryMarshaler); ok {
+					saved, _ = m.MarshalBinary()
+				}
+			}
+			if size <= int64(limit)+1 {
+				held = append(held, chunk...)
+				continue
+			}
+			if h != nil {
+				h.Write(held)
+				h.Write(chunk)
+			}
+			held = nil
+			if saved == nil {
+				saved = []byte{}
+			}
+		default:
+			// A torn final line: whatever of it was written goes back out.
+			if len(saved) > 0 && h != nil {
+				if u, ok := h.(encoding.BinaryUnmarshaler); ok {
+					_ = u.UnmarshalBinary(saved)
+				}
+			}
+			return nil, 0, io.EOF
+		}
 	}
-	return line, nil
 }
 
 // copyChecking hashes the first n bytes of f into h, comparing the running
@@ -520,47 +660,104 @@ func (w *Witness) stream(t *tick, name string) error {
 		}
 	}
 	before := st.bytes
-	var window []checkpoint.LineAt
-	var restarts []int64
+	// The lines pending checkpoint records name: those already behind this
+	// read are answered in one pass from byte zero, the new ones as they pass.
+	pend := w.pending(name, st)
+	behind := map[int64]bool{}
+	for c := range pend.counts {
+		if c <= st.lines {
+			behind[c] = true
+		}
+	}
+	window := linesAt(path, behind)
+	// A resume record explains the restart on the line after its count; the
+	// ones this box kept, and those pending, are what a collapsed restart is
+	// checked against.
+	resumeAt := map[int64]bool{}
+	for _, k := range st.kept {
+		if k.kind == "resume" {
+			resumeAt[k.count] = true
+		}
+	}
+	for c := range pend.resumes {
+		resumeAt[c] = true
+	}
+	var restarts []int64       // raised one by one, at most MaxRestartFindings
+	var collapsedMaybe []int64 // past the bound, with a resume record that may explain them
+	collapsed, collapsedUnexplained, firstCollapsed := int64(0), int64(0), int64(0)
 	r := bufio.NewReaderSize(f, 64<<10)
 	for {
-		line, err := readLine(r)
+		line, size, err := nextLine(r, h, MaxLine)
 		if err != nil {
 			break
 		}
-		h.Write(line)
-		st.bytes += int64(len(line))
+		if line != nil {
+			h.Write(line)
+		}
+		st.bytes += size
 		st.lines++
-		content := line[:len(line)-1]
+		var content []byte
+		if line != nil {
+			content = line[:len(line)-1]
+		}
 		var probe struct {
 			PrevHash *string `json:"prev_hash"`
 		}
 		head := ""
-		if len(content) <= MaxLine && json.Unmarshal(content, &probe) == nil {
+		if line != nil && json.Unmarshal(content, &probe) == nil {
 			switch {
-			case probe.PrevHash == nil && st.lines > 1:
-				restarts = append(restarts, st.lines)
-			case probe.PrevHash != nil && st.head != "" && *probe.PrevHash != st.head:
-				restarts = append(restarts, st.lines)
+			case probe.PrevHash == nil && st.lines > 1, probe.PrevHash != nil && st.head != "" && *probe.PrevHash != st.head:
+				switch {
+				case len(restarts) < MaxRestartFindings:
+					restarts = append(restarts, st.lines)
+				default:
+					if collapsed == 0 {
+						firstCollapsed = st.lines
+					}
+					collapsed++
+					if resumeAt[st.lines-1] {
+						collapsedMaybe = append(collapsedMaybe, st.lines)
+					} else {
+						collapsedUnexplained++
+					}
+				}
 			}
 			head, _ = event.ChainHashRaw(content)
 		}
 		st.head = head
-		window = append(window, checkpoint.LineAt{Count: st.lines, End: st.bytes, Prefix: checkpoint.SumOf(h), Head: head})
+		if pend.counts[st.lines] {
+			window[st.lines] = checkpoint.LineAt{Count: st.lines, End: st.bytes, Prefix: checkpoint.SumOf(h), Head: head}
+		}
 	}
 	st.prefix, st.h = checkpoint.SumOf(h), h
 	ckptChanged := false
 	if w.cfg.Checkpoints != "" {
-		ckptChanged = w.checkpoints(t, name, st, lineView{st: st, window: window, path: path}, full)
+		ckptChanged = w.checkpoints(t, name, st, lineView{st: st, window: window, path: path}, full, max(pend.records, 1))
 	}
-	for _, line := range restarts {
-		explained := false
+	explainedBy := func(line int64) bool {
 		for _, k := range st.kept {
 			if k.kind == "resume" && k.count == line-1 {
-				explained = true
+				return true
 			}
 		}
+		return false
+	}
+	for _, line := range restarts {
+		explained := explainedBy(line)
 		t.find(ChainRestarted, explained, map[string]any{"stream": name, "line": line, "explained": explained})
+	}
+	if collapsed > 0 {
+		// The rest of this read's restarts in one finding, judged as each
+		// would have been: unexplained if any one of them is, so a real
+		// break is never hidden behind explained ones.
+		for _, line := range collapsedMaybe {
+			if !explainedBy(line) {
+				collapsedUnexplained++
+			}
+		}
+		explained := collapsedUnexplained == 0
+		t.find(ChainRestarted, explained, map[string]any{"stream": name, "line": firstCollapsed, "explained": explained,
+			"more_restarts": collapsed, "unexplained_restarts": collapsedUnexplained})
 	}
 	if st.bytes != before || mode != "forward" || ckptChanged {
 		t.entries = append(t.entries, wlog.Entry{Kind: "stream", SeenAt: t.now.Unix(), Stream: name, Lines: st.lines, Bytes: st.bytes,
@@ -571,7 +768,7 @@ func (w *Witness) stream(t *tick, name string) error {
 
 // checkpoints reads the stream's checkpoint file from where it stopped, and
 // reports whether it moved.
-func (w *Witness) checkpoints(t *tick, name string, st *streamState, view lineView, full bool) bool {
+func (w *Witness) checkpoints(t *tick, name string, st *streamState, view lineView, full bool, budget int) bool {
 	path := filepath.Join(w.cfg.Checkpoints, name+".ckpt.ndjson")
 	f, err := os.Open(path) // #nosec G304 -- a checkpoint file in the directory the operator named
 	if err != nil {
@@ -594,13 +791,16 @@ func (w *Witness) checkpoints(t *tick, name string, st *streamState, view lineVi
 		r := bufio.NewReaderSize(f, 64<<10)
 		st.ckptBytes, st.ckptLast = 0, ""
 		for {
-			line, err := readLine(r)
+			line, size, err := nextLine(r, h, checkpoint.MaxRecord)
 			if err != nil {
 				break
 			}
-			h.Write(line)
-			st.ckptBytes += int64(len(line))
-			st.ckptLast = checkpoint.HashOf(line[:len(line)-1])
+			st.ckptBytes += size
+			st.ckptLast = oversized
+			if line != nil {
+				h.Write(line)
+				st.ckptLast = checkpoint.HashOf(line[:len(line)-1])
+			}
 		}
 		st.ckptHash, st.ckptPrefix = h, checkpoint.SumOf(h)
 		return true
@@ -631,11 +831,21 @@ func (w *Witness) checkpoints(t *tick, name string, st *streamState, view lineVi
 		return c.Public, nil
 	}
 	r := bufio.NewReaderSize(f, 64<<10)
-read:
-	for {
-		line, err := readLine(r)
+	read := 0
+records:
+	for ; read < budget; read++ {
+		line, size, err := nextLine(r, st.ckptHash, checkpoint.MaxRecord)
 		if err != nil {
 			break
+		}
+		if line == nil {
+			// Longer than any record: read and hashed without being held,
+			// and refused.
+			t.find(CheckpointInvalid, false, map[string]any{"stream": name, "count": int64(0), "reason": "a line longer than any record"})
+			st.ckptBytes += size
+			st.ckptLast = oversized
+			moved = true
+			continue
 		}
 		content := line[:len(line)-1]
 		rec, perr := checkpoint.ParseRecord(content)
@@ -657,7 +867,7 @@ read:
 			if unavailable {
 				// Custody did not answer, so nothing was refused: the record
 				// is read again next interval.
-				break read
+				break records
 			}
 			switch status {
 			case checkpoint.Accepted:
