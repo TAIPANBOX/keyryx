@@ -505,6 +505,47 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestTheAdminCommandRefusesWhatItCannotSend`,
     `TestTheBuiltCustodyRotatesAndRevokesThroughItsAdminSocketAndTellsTheBus`)*
 
+44. **Custody can publish what it certified into a directory of its own, for a
+    reader on the machine that may open no connection.** `@decided 2026-11-25`:
+    heraldyx, which opens no connection but its one way out (mail), gets
+    custody's key statements through a file, not the network; custody writes
+    public copies, atomically, and heraldyx reads them read only. So with
+    `KEYRYX_STATEMENTS_DIR` set (refused unless a real directory owned by
+    custody's uid, writable by nobody else, apart from `KEYRYX_DATA` and the
+    bus's directory), custody keeps in it `delegation-root.jwks.json`, the
+    bytes `GET /v1/jwks/keyryx.delegation-root` serves (refused too when it
+    holds the root key file or the consumers' sockets; paths compared after
+    links are followed), and for every delegated
+    key `<kid>.json`, `{statement, revoked_at}` as `GET /v1/statements/{kid}`
+    serves them; nothing else, and nothing from the store. Every write goes
+    through the open directory (`os.Root`), to a new file synced, mode 0644,
+    renamed over the old, and is of the registry's state when it is made, so an
+    older state never lands after a newer one. A start removes temporary files,
+    refuses a name custody never writes, refuses a copy custody's data cannot
+    have written (a kid it does not know, a revocation it does not hold: its
+    data is older than what it published, restored over it), and writes
+    everything. Every admin call that touches the root marks its key set to be
+    copied again however the call ends. A revocation and
+    a change of the root are written as a step of the admin change of invariant
+    43, tried whatever the other steps did, and answer 503 when the copy failed
+    (the change stands); a certification is copied soon after its answer, which
+    never waits on it. A copy that failed waits (`unexported` in
+    `GET /v1/state`) and is tried again every few seconds. *(tests:
+    `TestCheckRefusesADirectoryCustodyMustNotWrite`,
+    `TestOpenBringsTheDirectoryToCustodysState`,
+    `TestOpenRefusesADirectoryHoldingWhatCustodyNeverWrites`,
+    `TestAWriteIsOfTheStateAsItStandsNotOneQueuedEarlier`,
+    `TestAFailedWriteWaitsAndIsTriedAgain`, `TestOnlyAKidNamesAFile`,
+    `TestAStartOverCopiesNewerThanCustodysDataRefuses`,
+    `TestMarksWritesAndFlushesTogetherLeaveTheLatestState`, in
+    `internal/export`; `TestACertificationIsMarkedForTheReadersCopy`,
+    `TestARevocationOfADelegatedKeyIsCopiedAsPartOfTheChange`,
+    `TestARevocationWhoseCopyFailedAnswers503AndStands`,
+    `TestAChangeOfTheRootRewritesItsKeySetForTheReader`,
+    `TestTheRootSetIsWhatTheKeySetRouteServes`, in `internal/api`;
+    `TestTheStatementsDirectoryIsCustodysOwnAndApart`, in `internal/config`;
+    `TestTheBuiltCustodyPublishesItsStatementsForAReaderOnTheMachine`)*
+
 ## What must never be added without a conversation
 
 - **A route on any request path**: anything a door, a policy decision point or

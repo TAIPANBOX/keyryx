@@ -7,7 +7,7 @@ writers who saw the record when it was written.**
 
 [![CI](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml/badge.svg)](https://github.com/TAIPANBOX/keyryx/actions/workflows/ci.yml)
 ![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
-![tests](https://img.shields.io/badge/tests-216-brightgreen.svg)
+![tests](https://img.shields.io/badge/tests-231-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Status](https://img.shields.io/badge/runtime%20dependencies-2-blue.svg)
 
@@ -211,6 +211,21 @@ socket alone, `KEYRYX_DATA/admin.sock`:
 | `POST /v1/keys/{name}/rotate` | root or custody's user, on the admin socket | creates the next key, published now, signing after `KEYRYX_PUBLISH_AHEAD`; for `keyryx.delegation-root`, both halves together, and a rotation that stopped after one half is completed by the next call |
 | `POST /v1/kids/{kid}/revoke` | root or custody's user, on the admin socket | takes a key id out of every key set at once, held or delegated; revoking the active held key promotes the next one, or makes a fresh one |
 
+### Public copies for a reader on the machine
+
+With `KEYRYX_STATEMENTS_DIR` set, custody keeps two kinds of file there, both
+public:
+
+- `delegation-root.jwks.json`: the delegation root's key set, the bytes
+  `GET /v1/jwks/keyryx.delegation-root` serves;
+- `<kid>.json`: `{"statement": ..., "revoked_at": ...}` for every delegated
+  key, as `GET /v1/statements/{kid}` serves them.
+
+Each file is replaced atomically. A revocation and a change of the root are
+written as part of the admin change, which answers 503 if the copy failed (the
+change stands, and the copy is tried again); a certification is copied a
+moment after its answer. Mount the directory read only into the reader.
+
 ### Rotating and revoking
 
 ```sh
@@ -333,6 +348,7 @@ Each consumer in the policy authenticates exactly one way:
 | `KEYRYX_SOCKET_DIR` | once a consumer uses `socket` | the parent of each socket consumer's directory |
 | `KEYRYX_K8S_ISSUERS` | once a consumer uses `k8s` | one `issuer\|audience\|jwks-file` per line or comma |
 | `KEYRYX_EVENTS` | yes | custody's own event stream on the bus, an absolute path, for example `/var/lib/stack/events/keyryx-custody.ndjson`; every rotation and revocation is announced there. Not `keyryx.ndjson`, the witness's stream, and not inside `KEYRYX_DATA`. Custody writes it only as a regular file with one link owned by its own uid: a launcher pre-creates it for custody's uid, or custody creates it in a directory it owns |
+| `KEYRYX_STATEMENTS_DIR` | no | a directory of custody's own (owned by its uid, writable by nobody else, apart from `KEYRYX_DATA` and the bus) where it keeps public copies of the delegation root's key set and of every delegated key's statement and revocation, for a reader on the machine that may open no connection, such as heraldyx's checkpoint gate |
 | `KEYRYX_ADMIN_KEYS` | must be unset | no longer read as keys: set to anything but empty, it refuses the start, because rotation and revocation are on the admin socket |
 | `KEYRYX_PUBLISH_AHEAD` | no | how long a next key, or a renewed delegated key, is published before it signs; default `15m`, one minute to one day |
 
@@ -460,7 +476,7 @@ each what `GET /v1/statements/{kid}` answered.
 
 ## Testing
 
-213 tests. Tier T3: these are key and signature decisions where a wrong answer
+228 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
 mutation-tested.
 

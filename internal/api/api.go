@@ -82,6 +82,17 @@ func AdminRoutes() []Route { return slices.Clone(adminRoutes) }
 // Announcer is where an admin action's announcement goes: the outbox of
 // internal/announce, which answers once the announcement is on disk and leaves
 // the bus to its delivery loop.
+// Exporter is where custody's public statements are copied for a reader on
+// the machine (internal/export): a delegated key's file, written now or
+// marked to be written soon, and the delegation root's key set.
+type Exporter interface {
+	Kid(kid string) error
+	Root() error
+	Mark(kid string)
+	MarkRoot()
+	Unexported() int
+}
+
 type Announcer interface {
 	Enqueue(announce.Announcement) error
 	Has(typ, kid string) bool
@@ -97,6 +108,7 @@ type Server struct {
 	Log          *uselog.Log
 	Auth         *auth.Verifier
 	Announce     Announcer
+	Export       Exporter // nil when KEYRYX_STATEMENTS_DIR is not set
 	AdminUID     int
 	adminMu      sync.Mutex // one admin change at a time, so each is announced once
 	PublishAhead time.Duration
@@ -290,6 +302,25 @@ func (s *Server) record(w http.ResponseWriter, route string, e uselog.Entry, as 
 	return true
 }
 
+// exported writes a change's public copy now, when custody publishes into a
+// directory: a delegated kid's file, or the root key set. Its error, when not
+// nil, answers 503 after the change's other steps were tried; the change
+// stands and the copy is tried again.
+func (s *Server) exported(kid string, root bool) error {
+	if s.Export == nil {
+		return nil
+	}
+	if root {
+		return s.Export.Root()
+	}
+	return s.Export.Kid(kid)
+}
+
+// exportRefused answers 503 for a change whose public copy did not write.
+func exportRefused(w http.ResponseWriter, route, kid string, err error) {
+	refuse(w, http.StatusServiceUnavailable, route, "export_failed", "kid", kid, "error", err.Error())
+}
+
 // activeKid is the kid a held key signs with now, "" when it has none.
 func (s *Server) activeKid(name string) string {
 	recs, _ := s.Store.Published(name)
@@ -360,6 +391,10 @@ func (s *Server) state(w http.ResponseWriter, _ *http.Request) {
 		// Admin changes the bus has not heard of yet (internal/announce).
 		out["unannounced"] = s.Announce.Pending()
 	}
+	if s.Export != nil {
+		// Public copies not yet written where a reader mounts them.
+		out["unexported"] = s.Export.Unexported()
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -401,6 +436,21 @@ func (s *Server) inventory(w http.ResponseWriter, _ *http.Request) {
 			Created: st.IssuedAt, Retired: e.Retired, Revoked: e.Revoked, Owner: st.Owner, NotBefore: st.NotBefore, NotAfter: st.NotAfter})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
+}
+
+// RootSet is the delegation root's key set, both halves, as
+// GET /v1/jwks/keyryx.delegation-root serves it.
+func (s *Server) RootSet() ([]byte, error) {
+	keys := []map[string]any{}
+	for _, n := range []string{statement.RootES384, statement.RootMLDSA} {
+		recs, _ := s.Store.Published(n)
+		for _, rec := range recs {
+			if j := keystore.JWK(rec); j != nil {
+				keys = append(keys, j)
+			}
+		}
+	}
+	return json.Marshal(map[string]any{"keys": keys})
 }
 
 // jwks publishes a key's set. Its cache lifetime is at most half the
@@ -594,6 +644,12 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
 			before = rec
 		}
 	}
+	if s.Export != nil && (before.Name == statement.RootES384 || before.Name == statement.RootMLDSA) {
+		// Whatever the store did, and however this answer ends, the root
+		// key set is copied again soon: a half it revoked and then failed
+		// to replace must not stay in the reader's copy.
+		defer s.Export.MarkRoot()
+	}
 	rec, err := s.Store.Revoke(kid)
 	switch {
 	case errors.Is(err, keystore.ErrUnknownKid) && s.Certs != nil:
@@ -615,7 +671,17 @@ func (s *Server) revoke(w http.ResponseWriter, r *http.Request) {
 			as = append(as, announce.Rotated(rec.Name, now, kid, string(rec.Alg)))
 		}
 	}
+	// A half of the delegation root changes the root key set a reader
+	// verifies statements under; any other held key is no statement.
+	var exportErr error
+	if rec.Name == statement.RootES384 || rec.Name == statement.RootMLDSA {
+		exportErr = s.exported("", true)
+	}
 	if !s.record(w, route, uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + who, Op: "revoke", Key: rec.Name, Kid: rec.Kid}, as...) {
+		return
+	}
+	if exportErr != nil {
+		exportRefused(w, route, kid, exportErr)
 		return
 	}
 	writeJSON(w, http.StatusOK, publicRecord(rec))
@@ -645,6 +711,12 @@ func (s *Server) certs() []certify.Entry {
 // refused.
 func (s *Server) rotateRoot(w http.ResponseWriter, who string) {
 	const route = "rotate"
+	if s.Export != nil {
+		// Whichever way this ends (a half rotated and the next failed, a
+		// use-log line that did not write, a second rotation refused), the
+		// root key set is copied again soon.
+		defer s.Export.MarkRoot()
+	}
 	halves := []string{statement.RootES384, statement.RootMLDSA}
 	most := 0
 	for _, n := range halves {
@@ -688,6 +760,10 @@ func (s *Server) rotateRoot(w http.ResponseWriter, who string) {
 		}
 		out = append(out, publicRecord(rec))
 	}
+	if err := s.exported("", true); err != nil {
+		exportRefused(w, route, statement.RootName, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
 
@@ -706,7 +782,12 @@ func (s *Server) revokeDelegated(w http.ResponseWriter, who, kid string) {
 	if !s.Announce.Has(announce.KeyRevoked, kid) {
 		as = append(as, announce.Revoked(st.Name, st.Kid, st.JWK.Alg))
 	}
+	exportErr := s.exported(kid, false)
 	if !s.record(w, route, uselog.Entry{At: s.now().Unix(), Consumer: "admin:" + who, Op: "revoke", Key: st.Name, Kid: st.Kid}, as...) {
+		return
+	}
+	if exportErr != nil {
+		exportRefused(w, route, kid, exportErr)
 		return
 	}
 	_, revoked, _ := s.Certs.Statement(kid)
@@ -821,6 +902,11 @@ func (s *Server) delegate(w http.ResponseWriter, r *http.Request) {
 	default:
 		refuse(w, http.StatusInternalServerError, route, "registry_failed", "consumer", consumer, "key", name, "error", err.Error())
 		return
+	}
+	if s.Export != nil {
+		// Copied for a reader on the machine soon; a failed copy is tried
+		// again, and the consumer's answer never waits on it.
+		s.Export.Mark(st.Kid)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"statement": json.RawMessage(raw), "kid": st.Kid, "not_before": st.NotBefore, "not_after": st.NotAfter})
 }

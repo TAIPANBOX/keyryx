@@ -21,7 +21,7 @@ Status: pre-1.0 (latest tag v0.1.5): no tag has frozen this surface yet. The sur
 - `key_revoked`
 - held in: `internal/announce/announce.go`
 
-### env (27)
+### env (28)
 
 - `KEYRYX_DATA`
 - `KEYRYX_ROOT_KEY_FILE`
@@ -29,6 +29,7 @@ Status: pre-1.0 (latest tag v0.1.5): no tag has frozen this surface yet. The sur
 - `KEYRYX_ADDR`
 - `KEYRYX_SOCKET_DIR`
 - `KEYRYX_EVENTS`
+- `KEYRYX_STATEMENTS_DIR`
 - `KEYRYX_K8S_ISSUERS`
 - `KEYRYX_PUBLISH_AHEAD`
 - `KEYRYX_WITNESS_DATA`

@@ -78,7 +78,7 @@ func base(t *testing.T) map[string]string {
 
 func withEnv(t *testing.T, env map[string]string) (Config, error) {
 	t.Helper()
-	for _, k := range []string{"KEYRYX_DATA", "KEYRYX_ROOT_KEY_FILE", "KEYRYX_POLICY", "KEYRYX_ADDR", "KEYRYX_SOCKET_DIR", "KEYRYX_ADMIN_KEYS", "KEYRYX_K8S_ISSUERS", "KEYRYX_PUBLISH_AHEAD", "KEYRYX_EVENTS"} {
+	for _, k := range []string{"KEYRYX_DATA", "KEYRYX_ROOT_KEY_FILE", "KEYRYX_POLICY", "KEYRYX_ADDR", "KEYRYX_SOCKET_DIR", "KEYRYX_ADMIN_KEYS", "KEYRYX_K8S_ISSUERS", "KEYRYX_PUBLISH_AHEAD", "KEYRYX_EVENTS", "KEYRYX_STATEMENTS_DIR"} {
 		t.Setenv(k, env[k])
 	}
 	return FromEnv()
@@ -206,5 +206,37 @@ func TestANetworkAdminKeyRefusesTheStart(t *testing.T) {
 	env["KEYRYX_DATA"] = "/" + strings.Repeat("d", MaxSocketPath-len("/admin.sock")-1)
 	if _, err := withEnv(t, env); err != nil && strings.Contains(err.Error(), "too long") {
 		t.Fatalf("a data directory whose socket fits was refused as too long: %v", err)
+	}
+}
+
+func TestTheStatementsDirectoryIsCustodysOwnAndApart(t *testing.T) {
+	env := base(t)
+	if c, err := withEnv(t, env); err != nil || c.Statements != "" {
+		t.Fatalf("unset: %v %q", err, c.Statements)
+	}
+	good := filepath.Join(filepath.Dir(env["KEYRYX_DATA"]), "statements")
+	if err := os.Mkdir(good, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env["KEYRYX_STATEMENTS_DIR"] = good
+	if c, err := withEnv(t, env); err != nil || c.Statements != good {
+		t.Fatalf("a directory of custody's own: %v %q", err, c.Statements)
+	}
+	inside := filepath.Join(env["KEYRYX_DATA"], "statements")
+	_ = os.Mkdir(inside, 0o700)
+	open := filepath.Join(filepath.Dir(env["KEYRYX_DATA"]), "open")
+	_ = os.Mkdir(open, 0o755)
+	_ = os.Chmod(open, 0o777)
+	for name, d := range map[string]string{
+		"inside the data directory":     inside,
+		"the data directory":            env["KEYRYX_DATA"],
+		"the bus's directory":           filepath.Dir(env["KEYRYX_EVENTS"]),
+		"a directory others write":      open,
+		"a directory that is not there": filepath.Join(good, "absent"),
+	} {
+		env["KEYRYX_STATEMENTS_DIR"] = d
+		if _, err := withEnv(t, env); err == nil || !strings.Contains(err.Error(), "KEYRYX_STATEMENTS_DIR") {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }
