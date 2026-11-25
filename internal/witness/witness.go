@@ -534,7 +534,10 @@ func nextLine(r *bufio.Reader, h hash.Hash, limit int) ([]byte, int64, error) {
 		case err == nil && held == nil && saved == nil && size <= int64(limit)+1:
 			return append([]byte(nil), chunk...), size, nil
 		case err == nil:
+			// Over the bound on its last piece: what was held so far is
+			// part of the line too.
 			if h != nil {
+				h.Write(held)
 				h.Write(chunk)
 			}
 			return nil, size, nil

@@ -310,3 +310,31 @@ func TestPendingCheckpointsAreAnsweredFromTheReadItself(t *testing.T) {
 		t.Fatalf("%d checkpoints accepted, want 3", kept)
 	}
 }
+
+// nextLine hashes every byte of a line it does not return, wherever the line
+// crosses its bound: in the first piece, in a middle one, or in the last.
+func TestALineCrossingTheBoundInAnyPieceIsHashedWhole(t *testing.T) {
+	const limit = 100_000
+	for _, n := range []int{limit, limit + 1, limit + 2, 64<<10 - 1, 64<<10 + 1, limit + 64<<10, 3 * 64 << 10} {
+		line := make([]byte, n)
+		for i := range line {
+			line[i] = byte('a' + i%26)
+		}
+		line = append(line, '\n')
+		h := sha256.New()
+		got, size, err := nextLine(bufio.NewReaderSize(strings.NewReader(string(line)+"next\n"), 64<<10), h, limit)
+		if err != nil || size != int64(len(line)) {
+			t.Fatalf("%d: %v, size %d", n, err, size)
+		}
+		if got != nil {
+			h.Write(got)
+		}
+		want := sha256.Sum256(line)
+		if string(h.Sum(nil)) != string(want[:]) {
+			t.Errorf("a line of %d bytes (bound %d) was not hashed whole; returned held: %v", n, limit, got != nil)
+		}
+		if (got != nil) != (n <= limit) {
+			t.Errorf("a line of %d bytes was returned %v, want %v", n, got != nil, n <= limit)
+		}
+	}
+}

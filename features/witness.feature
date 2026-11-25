@@ -348,6 +348,12 @@ Feature: An independent witness of the record
     When the witness reads it each time
     Then it holds a few MiB at most, counts and hashes every byte, takes no torn line, and raises nothing once the LF arrives
 
+  # @test:TestALineCrossingTheBoundInAnyPieceIsHashedWhole
+  Scenario: A line crossing the bound in any piece is hashed whole
+    Given lines just under, at and just over the bound, crossing it in the first, a middle or the last piece read
+    When each is read
+    Then every byte of each is hashed, and only the lines within the bound are returned
+
   # @test:TestCheckpointsLeftBehindAreAnsweredInOnePass
   Scenario: Checkpoints left behind are answered in one pass
     Given five checkpoint records that waited while custody did not answer, and a stream read on past them

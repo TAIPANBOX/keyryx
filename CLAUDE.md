@@ -289,7 +289,8 @@ docs or commit messages, as tooling for acting against anyone else.
     `TestPendingCheckpointsAreAnsweredFromTheReadItself`,
     `TestAnUnexplainedRestartIsNeverHiddenBehindExplainedOnes`,
     `TestALineLongerThanTheBoundIsHashedNotHeld`,
-    `TestCheckpointsLeftBehindAreAnsweredInOnePass`)*
+    `TestCheckpointsLeftBehindAreAnsweredInOnePass`,
+    `TestALineCrossingTheBoundInAnyPieceIsHashedWhole`)*
 
 32. **A checkpoint is checked by SPEC 6.5.1 format v1, step by step.** Its
     own RFC 8785 form and nothing else; its signature under a key a statement
