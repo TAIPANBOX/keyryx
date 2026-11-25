@@ -40,6 +40,7 @@ import (
 	"github.com/TAIPANBOX/keyryx/internal/auth"
 	"github.com/TAIPANBOX/keyryx/internal/certify"
 	"github.com/TAIPANBOX/keyryx/internal/config"
+	"github.com/TAIPANBOX/keyryx/internal/export"
 	"github.com/TAIPANBOX/keyryx/internal/keystore"
 	"github.com/TAIPANBOX/keyryx/internal/statement"
 	"github.com/TAIPANBOX/keyryx/internal/uselog"
@@ -155,6 +156,15 @@ func custody(stderr io.Writer) int {
 		Announce: out, AdminUID: os.Geteuid(), PublishAhead: cfg.PublishAhead, Now: time.Now, Version: version,
 	}
 	handler := srv.Handler()
+	// Public copies for a reader on this machine (internal/export), brought
+	// to custody's state now: a directory that does not take them refuses.
+	var exp *export.Exporter
+	if cfg.Statements != "" {
+		if exp, err = export.Open(cfg.Statements, exportSource{srv: srv, certs: certs}, log.Printf); err != nil {
+			return refuse(fmt.Errorf("KEYRYX_STATEMENTS_DIR: %w", err))
+		}
+		srv.Export = exp
+	}
 
 	tcp, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
@@ -198,6 +208,9 @@ func custody(stderr io.Writer) int {
 	defer stop()
 	delivered := make(chan struct{})
 	go func() { out.Run(ctx.Done()); close(delivered) }()
+	if exp != nil {
+		go exp.Run(ctx.Done())
+	}
 	failed := make(chan error, len(all))
 	for _, x := range all {
 		go func() {
@@ -262,4 +275,23 @@ func listenSocket(path string, mode os.FileMode) (net.Listener, error) {
 		return nil, err
 	}
 	return l, nil
+}
+
+// exportSource is custody's state as internal/export reads it: the root key
+// set the API publishes, and the registry's statements.
+type exportSource struct {
+	srv   *api.Server
+	certs *certify.Registry
+}
+
+func (x exportSource) RootSet() ([]byte, error) { return x.srv.RootSet() }
+
+func (x exportSource) Statement(kid string) ([]byte, int64, bool) { return x.certs.Statement(kid) }
+
+func (x exportSource) Kids() []string {
+	var out []string
+	for _, e := range x.certs.Inventory() {
+		out = append(out, e.Statement.Kid)
+	}
+	return out
 }

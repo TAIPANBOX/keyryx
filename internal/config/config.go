@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/TAIPANBOX/keyryx/internal/auth"
+	"github.com/TAIPANBOX/keyryx/internal/export"
 	"github.com/TAIPANBOX/keyryx/internal/policy"
 	"github.com/TAIPANBOX/keyryx/internal/rootkey"
 )
@@ -48,6 +49,7 @@ type Config struct {
 	SocketDir    string
 	AdminSocket  string
 	Events       string
+	Statements   string // KEYRYX_STATEMENTS_DIR, "" when custody publishes no copies
 	Issuers      []auth.Issuer
 	PublishAhead time.Duration
 }
@@ -128,6 +130,14 @@ func FromEnv() (Config, error) {
 	}
 	if rel, err := filepath.Rel(filepath.Clean(c.DataDir), c.Events); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return c, fmt.Errorf("KEYRYX_EVENTS %s is inside KEYRYX_DATA, which no reader of the bus can read", c.Events)
+	}
+	// Public copies of the delegation root and of every statement, for a
+	// reader on this machine that may open no connection (heraldyx). A
+	// directory of custody's own, apart from its data and from the bus.
+	if c.Statements = os.Getenv("KEYRYX_STATEMENTS_DIR"); c.Statements != "" {
+		if err := export.Check(c.Statements, os.Geteuid(), []string{c.DataDir, filepath.Dir(c.Events)}); err != nil {
+			return c, fmt.Errorf("KEYRYX_STATEMENTS_DIR: %w", err)
+		}
 	}
 
 	if c.Issuers, err = auth.ParseIssuers(os.Getenv("KEYRYX_K8S_ISSUERS"), readJWKS); err != nil {
