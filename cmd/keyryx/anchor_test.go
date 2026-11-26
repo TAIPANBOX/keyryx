@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,13 +85,13 @@ func TestAnAnchorNeedsAHeadAndStampsExactlyTheLatestOne(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer empty.Close()
-	asked := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { asked = true }))
+	var asked atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { asked.Store(true) }))
 	defer srv.Close()
 	if err := anchor(context.Background(), empty, &tsa.Client{URL: srv.URL, HTTP: srv.Client()}); err == nil || !strings.Contains(err.Error(), "no tree head") {
 		t.Fatalf("a log with no head: %v", err)
 	}
-	if asked {
+	if asked.Load() {
 		t.Fatal("a log with no head asked the TSA anyway")
 	}
 
