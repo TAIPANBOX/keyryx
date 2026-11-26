@@ -617,3 +617,11 @@ Published as `ghcr.io/taipanbox/keyryx` by `.github/workflows/release.yml` on a
 signed keyless with cosign by digest, an SBOM and a build-provenance attestation
 attached. No moving tag (`:latest`, `:main`) is ever published. The version the
 binary reports (`main.version`) is stamped from the tag at build time.
+
+## Coverage floor
+
+Total test coverage measured in CI may not fall below the number in `.coverage-floor`, and that number may only rise: it was set to the first CI measurement minus one point, and is raised when coverage rises. The goal is 90% (the `# target:` line in that file); the floor is raised towards it, and the job summary prints the total, the slack above the floor and the gap to the target. *(gate: `scripts/coverage-floor.sh check` and `ratchet` in CI; teeth cases in `scripts/gates-have-teeth.sh`)*
+
+## Mutation testing
+
+A weekly run (`.github/workflows/mutation.yml`, Sundays, also by hand with `workflow_dispatch`) breaks the product code one fault at a time with gremlins v0.6.0 and puts the count of killed and surviving mutants on the run page. Measured, not gated: no score is required yet.
