@@ -478,7 +478,10 @@ each what `GET /v1/statements/{kid}` answered.
 
 267 tests. Tier T3: these are key and signature decisions where a wrong answer
 is silent, so every new test is red first and the product code is
-mutation-tested.
+mutation-tested. CI measures total statement coverage on every push (91.0% on
+main as of 2026-11-27, ratchet floor in `.coverage-floor` with a 90% target,
+checked by `scripts/coverage-floor.sh`) and runs a weekly gremlins mutation
+sweep as a single job on GitHub-hosted runners (`.github/workflows/mutation.yml`).
 
 ```bash
 go test ./... -race
