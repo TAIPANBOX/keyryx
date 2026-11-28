@@ -71,7 +71,7 @@ func TestTheReadmeHasTheHouseSections(t *testing.T) {
 		"## Verify the image",
 		"## Security",
 		"## Testing",
-		"## NOT PROVEN",
+		"## Limits",
 		"## Licence",
 	} {
 		if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(heading) + `$`).MatchString(readme) {

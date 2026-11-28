@@ -6,7 +6,7 @@ Each measured result carries the command that produced it and the date, as
 `@measured <command> <date>`, so a reader can run the same command. A claim
 without that marker has not been run: check it before relying on it. What was
 not run is listed at the end, and the same limits are in the README under
-NOT PROVEN.
+Limits.
 
 ## Gates and tests on this change
 

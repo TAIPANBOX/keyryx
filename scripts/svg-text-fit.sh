@@ -23,7 +23,7 @@
 #
 # How a browser shapes the glyphs. The widths are the design font's, not a
 # render's, so a renderer that falls back to another face is not checked here.
-# That is named in NOT PROVEN in README.md.
+# That is named under Limits in README.md.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 

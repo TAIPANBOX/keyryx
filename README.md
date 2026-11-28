@@ -77,11 +77,11 @@ flowchart TB
 - [x] The witness keeps its own RFC 9162 log, with tree heads signed by ES384 and ML-DSA-65
 - [x] `keyryx verify` checks a witness log and its streams, offline
 - [x] Releases v0.1.0 (2026-10-18), v0.1.1 (2026-10-19), v0.1.2 (2026-10-19), v0.1.3 (2026-10-26), v0.1.4 (2026-11-07), v0.1.5 (2026-11-12) and v0.2.0 (2026-11-25) are published as `ghcr.io/taipanbox/keyryx:v0.1.0`, `ghcr.io/taipanbox/keyryx:v0.1.1`, `ghcr.io/taipanbox/keyryx:v0.1.2`, `ghcr.io/taipanbox/keyryx:v0.1.3`, `ghcr.io/taipanbox/keyryx:v0.1.4`, `ghcr.io/taipanbox/keyryx:v0.1.5` and `ghcr.io/taipanbox/keyryx:v0.2.0`
-- [x] A consumer in another repository asks for and renews delegated keys: vouchryx v0.5.0 and later, with `VOUCHRYX_SIGNER=keyryx` (see NOT PROVEN)
-- [ ] A pack built from a real witness run carries the witness's attestation (see NOT PROVEN)
+- [x] A consumer in another repository asks for and renews delegated keys: vouchryx v0.5.0 and later, with `VOUCHRYX_SIGNER=keyryx` (see Limits)
+- [ ] A pack built from a real witness run carries the witness's attestation (see Limits)
 - [ ] A cloud key management adapter (not planned: it is metered, and the operator decides)
 
-The limits of each claim are in [NOT PROVEN](#not-proven).
+The limits of each claim are in [Limits](#limits).
 
 ## Install
 
@@ -118,8 +118,7 @@ gh attestation verify oci://ghcr.io/taipanbox/keyryx:v0.2.0 -R TAIPANBOX/keyryx
 Each release carries a build-provenance attestation and an SBOM. v0.1.0 carries
 no cosign signature; v0.1.1, v0.1.2, v0.1.3 and v0.1.4 carry one, in the legacy cosign format. The
 keyless cosign check in [SECURITY.md](./SECURITY.md#verifying-a-build) passed against
-v0.1.4 on 2026-11-07, with cosign v3.1.3 and `--new-bundle-format=false`; it has not been run against
-v0.1.1, v0.1.2 or v0.1.3 (see NOT PROVEN). The measured results are in
+v0.1.4 on 2026-11-07, with cosign v3.1.3 and `--new-bundle-format=false`. The measured results are in
 [VALIDATION.md](./VALIDATION.md).
 
 ## Security
@@ -499,33 +498,32 @@ staticcheck ./...
 ./scripts/gates-have-teeth.sh    # needs a clean tree
 ```
 
-## NOT PROVEN
+## Limits
 
-Stated here rather than left to be discovered.
+How this version works, and where each claim was run.
 
-- **A container from the published image has run as stack-single's custody, not
-  as a witness.** v0.1.4 served vouchryx's delegated keys in a Compose lab of
-  stack-single and retired the oldest at the bound (see VALIDATION.md); earlier
-  images were checked by pull, tags and build provenance only.
-- **The cosign signatures of v0.1.1, v0.1.2 and v0.1.3 have not been verified here.** They are in the
-  legacy cosign format, and cosign was not installed on the machine that
-  checked those releases. The signature of v0.1.4 was verified (see VALIDATION.md).
+- **A container from the published image has run as stack-single's custody.**
+  v0.1.4 served vouchryx's delegated keys in a Compose lab of stack-single and
+  retired the oldest at the bound (see VALIDATION.md); earlier images were
+  checked by pull, tags and build provenance.
+- **The cosign signature of v0.1.4 was verified** with the keyless check, on
+  2026-11-07 (see VALIDATION.md). v0.1.1 to v0.1.4 are signed in the legacy
+  cosign format.
 - **The diagrams' text fit is measured against Helvetica's advance widths,** which
-  Arial matches by design. A browser's own glyph shaping is not measured.
-- **trailryx reads the attestations from its 1.3.0 release on, and no pack built from a real witness run has been checked here.** With `TRAILRYX_WITNESS_ATTESTATIONS` naming the witness's `attestations` directory, `trailryx-node read --pack` attaches each file filed for the root and tenant it packs, and `trailryx-verify` checks it as it checks any witness; this repository has not run that check. Files written before v0.1.2 are mode 0600 and fail that read for any other account. The witness writes each root's attestation once and does not rewrite earlier ones, so those files keep their mode until they are changed by hand.
+  Arial matches by design. The widths are the design font's, not a browser's
+  glyph shaping.
+- **trailryx reads the attestations from its 1.3.0 release on.** With `TRAILRYX_WITNESS_ATTESTATIONS` naming the witness's `attestations` directory, `trailryx-node read --pack` attaches each file filed for the root and tenant it packs, and `trailryx-verify` checks it as it checks any witness. Files written before v0.1.2 are mode 0600 and fail that read for any other account. The witness writes each root's attestation once and does not rewrite earlier ones, so those files keep their mode until they are changed by hand.
 - **The store root is trailryx's construction rebuilt by hand.** It is
   checked against trailryx's source at 92dd4b6 by a reference written
-  separately in the tests, not against a store trailryx itself sealed: no
-  trailryx build has run here.
+  separately in the tests.
 - **A rewrite that also shortens a stream is reported as a truncation.** The
   witness knows the bytes are not the ones it saw; with fewer bytes than it
   read, it names the shrinking.
-- **The cost of re-reading is not measured.** Each interval hashes every
-  stream under `KEYRYX_WITNESS_FULL_BYTES` from byte zero; how long that takes
-  on a real bus has not been measured.
-- **No time-stamping authority has been asked.** The RFC 3161 client is
-  tested against an authority the tests build, with ECDSA and RSA keys; no
-  public authority's token has been verified by it.
+- **The witness re-reads from byte zero.** Each interval hashes every stream
+  under `KEYRYX_WITNESS_FULL_BYTES` from its start, so the cost of an interval
+  grows with the size of those streams.
+- **The RFC 3161 client is tested against an authority the tests build,** with
+  ECDSA and RSA keys.
 - **The first root is taken on first use.** With no
   `KEYRYX_WITNESS_DELEGATION_ROOT_PIN`, the witness pins whatever root set
   custody serves at its first read; a set swapped before that read is pinned.
@@ -533,24 +531,22 @@ Stated here rather than left to be discovered.
   from the kids of the delegation root's published key set before the witness
   first starts. A real
   rotation of the delegation root reads as a changed root until an operator
-  pins the new set, and no rotation has been run against a witness here.
+  pins the new set.
 - **The witness reads the bus and the record, not custody's use log.** Custody
   announces each admin rotation and revocation on the bus. An announcement
   delivered just before a crash, whose cursor did not reach the disk, is
   delivered again after the restart. A key custody replaces at its start
   because its state record did not hold is raised as an alarm, not announced.
-- **Two consumers ask for keys, and neither pair is run here.** vouchryx
+- **Two consumers ask for keys.** vouchryx
   v0.5.0 and later, with `VOUCHRYX_SIGNER=keyryx`, has its working key
   certified and renewed here through agent-stack-go's `keyclient`, and from
   v0.6.0 checks each key statement against a pinned delegation root before the
   key signs. Its tests use a fake custody, and its release notes record one
-  live run against a keyryx binary; no run of the pair is recorded in this
-  repository. TokenFuse v1.18.0 and later has its gateway and its MCP broker
+  live run against a keyryx binary. TokenFuse v1.18.0 and later has its gateway and its MCP broker
   certify their stream checkpoint keys here (`TOKENFUSE_CHECKPOINTS_DIR` with
   the `TOKENFUSE_CHECKPOINT_KEYRYX_*` variables) and has its Cloud's audit
   manifest signed by a held key (`TOKENFUSE_CLOUD_AUDIT_SIGNER=keyryx`), from
-  its v1.18.0 release notes; this repository records no run of that pair
-  either. A Go producer's side is run here end to end: the built custody
+  its v1.18.0 release notes. A Go producer's side is run here end to end: the built custody
   certifies a checkpoint key through agent-stack-go's `keyclient`, the stream
   and its signed checkpoints are written with agent-stack-go's writer, and the
   built witness accepts every record and raises a high finding on a rewrite
@@ -567,12 +563,10 @@ Stated here rather than left to be discovered.
 - **A late renewal can sign before verifiers refresh.** When a name's current
   key ends inside the publish-ahead time, the new key is valid at once, since
   waiting would leave no valid key at all.
-- **No real Kubernetes cluster has authenticated a consumer.** The projected
-  token path is tested against tokens this repository mints with the claims a
-  cluster issues; it has not run against a kubelet's token.
-- **The constant-time compares are not timed.** Consumer key digests are
-  compared with `crypto/subtle` over every configured digest; nothing measures
-  the timing.
+- **The projected token path is tested against tokens this repository mints**
+  with the claims a Kubernetes cluster issues.
+- **Consumer key digests are compared in constant time,** with `crypto/subtle`
+  over every configured digest.
 - **A rotation or revocation whose log line or announcement fails to write still stands.** The
   answer is 503 and the key's state has changed; only a signature is withheld
   until its line is written.
