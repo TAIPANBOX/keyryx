@@ -2,7 +2,7 @@
 
 Process and invariants only. **No status**: status goes stale, and a stale
 instruction file is worse than none. For where the code is, read the tests and
-`README.md`'s NOT PROVEN section.
+`README.md`'s Limits section.
 
 ## What this is
 
@@ -26,7 +26,7 @@ docs or commit messages, as tooling for acting against anyone else.
 
 ## Read before you change anything
 
-1. `README.md`, and specifically NOT PROVEN.
+1. `README.md`, and specifically Limits.
 2. The invariants below, and the "What must never be added" list.
 3. For anything that touches a key: RFC 7638 (thumbprints), RFC 7515/7517
    (JWS, JWK), FIPS 186-5 (ECDSA), FIPS 204 (ML-DSA), RFC 9162 (Merkle trees
